@@ -1,31 +1,24 @@
-/****************************************************
-*****************************************************
-  Mini Vario mit Bluetooth
-    Bluetooth Modul ist H-06
-    Barometer Modul ist MS5611
-    Mini PRO 3.3V 8 MHz oder Leonardo
-    oder !!!beliebiges!!! Arduino
-*****************************************************
-
-  Notiz:
-    Filter ist ein Mischung aus Exp-Filter und
-    Mittelwert aus "mittel_n"-Werte.
-    Hier ist die Erweiterung zum Akku-Ladezustand
-    auslesen.
-
-*****************************************************
-  Auf der Misst von Ivaylo gewachsen.
-  2018-08-25
-*****************************************************
-****************************************************/
+/*******************************************************************
+ * Mini Vario with Bluetooth support
+ * 
+ * First code by IvkoPivko/MiniVario-Arduino
+ * 
+ * Features:
+ *  Bluetooth Modul H-06
+ *  Barometer Modul MS5611 or BMP280
+ *  any Arduino board, tested with Arduino Nano
+ * 
+ *******************************************************************/
 
 #include <Wire.h>
 
 // constants for defining which barometer you use, do not change
+//! library: https://github.com/jarzebski/Arduino-MS5611
 #define _BARO_MS5611 1
+//! library: https://github.com/adafruit/Adafruit_BMP280_Library
 #define _BARO_BMP280 2
 
-// set here the used barometer
+// set here the used barometer, install required library via Arduino IDE
 #define BARO _BARO_BMP280
 
 #if BARO == _BARO_MS5611
