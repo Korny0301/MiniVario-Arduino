@@ -1,4 +1,9 @@
 # MiniVario-Arduino
+
+### Forked by IvkoPivko/MiniVario-Arduino
+Forked to include BMP280 sensor and clean up source code. Thanks to IvkoPivko for this great code basis!
+
+
 Acoustic Mini Variometer with Bluetooth function. 
 There are 2 modes for this mini Varion:
   - Acoustic Vario is a standard when switched on.
