@@ -1,13 +1,14 @@
 /*******************************************************************
- * Mini Vario with Bluetooth support
- * 
- * First code by IvkoPivko/MiniVario-Arduino
- * 
- * Features:
- *  Bluetooth Modul H-06
- *  Barometer Modul MS5611 or BMP280
- *  any Arduino board, tested with Arduino Nano
- * 
+   Mini Vario with Bluetooth support
+
+   First code by IvkoPivko/MiniVario-Arduino
+   Adapted by Korny0301/MiniVario-Arduino
+
+   Features:
+    Bluetooth Modul H-06
+    Barometer Modul MS5611 or BMP280
+    any Arduino board, tested with Arduino Nano
+
  *******************************************************************/
 
 #include <Wire.h>
@@ -18,8 +19,28 @@
 //! library: https://github.com/adafruit/Adafruit_BMP280_Library
 #define _BARO_BMP280 2
 
+// ###################################################
+// ###### ADAPTION AREA: adapt your config here ######
+
 // set here the used barometer, install required library via Arduino IDE
 #define BARO _BARO_BMP280
+
+// variables to adapt
+const short bt_pin = 2; // Bluetooth Pin definieren. Fuer Leonardo 14. Fuer die Anderen 2
+const int a_pin1 = 6; // Lautsprecher Pin definieren
+const short BatV = A3; // Akku Spannung Pin definieren
+
+const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
+const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
+
+long leseZeit = 125; // Interval zum lesen vom Baro audio Vario, Standard(min) ist 150
+const long leseZeitBT = 100; // Interval zum lesen vom Baro fuer BT, Standard(min) ist 100
+
+// Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
+float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
+
+// ###################################################
+// ######         END OF ADAPTION AREA          ######
 
 #if BARO == _BARO_MS5611
 # include <MS5611.h>
@@ -32,49 +53,19 @@ Adafruit_BMP280 bmp; // I2C
 #endif
 
 
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-///////////////////////////////   Variablen die Mann aendern kann!   /////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-float min_steigen = 0.20;               //Minimale Steigen (Standard Wert ist 0.4m/s).
-float max_sinken = -3.50;               //Maximales Sinken (Standard Wert ist - 1.1m/s).
-
-long leseZeit = 125;                    //Interval zum lesen vom Baro audio Vario, Standard(min) ist 150.
-long leseZeitBT = 100;                  //Interval zum lesen vom Baro fuer BT, Standard(min) ist 100.
-
-long konst_frqz = 150;                  //Audio Frequenz beim konstante Frequenz Einstellung.
-long max_frqz = 2000;                   //Maximale Audio Frequenz beim variable Frequenz Einstellung.
-
-short bt_pin = 2;                       //Bluetooth Pin definieren. Fuer Leonardo 14. Fuer die Anderen 2.
-
-int a_pin1 = 6;                         //Lautsprecher Pin definieren!
-
-// Filter Einstellungen!!!    Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
-float FehlerV = 3.000 * min_steigen;    //Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
-
-float mittel_n = 7;                     // Anzahl Werte fuer Mittelwert bilden.
-float kal[8];                           // kal[n] ==> n = mittel_n +1
-
-short BatV = A3;                        //Akku Spannung Pin definieren!
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// global variables
 long Druck, Druck0, DruckB;
 
 int PinBT,  XOR, c, startCH = 0, Vbat;
 float Vario, VarioR, Hoehe, AvrgV, Batt, Temp;
 
 unsigned long  dZeit, ZeitE, ZeitS, ZeitPip;
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+
+#define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
+float kal[AMOUNT_AVG_VALS];
 
 
-
-
-// SETUP//////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// initialization at startup
 void setup() {
   leseZeit = leseZeit - 34;
   // leseZeit = leseZeit - 34; // Wenn BT Eingebaut ist.
@@ -118,7 +109,7 @@ void setup() {
                   Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
 #endif
 
-  //BT umbenennen START
+  // BT umbenennen START
   if (PinBT == 1)
   {
     digitalWrite(7, HIGH);               // BT Versorgung einschalten.
@@ -140,7 +131,7 @@ void setup() {
     digitalWrite(7, LOW);               // BT Versorgung einschalten.
     digitalWrite(8, LOW);               // BT Versorgung einschalten.
   }
-  //BT umbenennen ENDE */
+  //BT umbenennen ENDE
 
 
   // Spielt die Start-Tonfolge.
@@ -156,25 +147,16 @@ void setup() {
   delay(200);
   tone(a_pin1 , 1600, 150);
   delay(200);
-  // */
 
   ZeitS = micros();
-
 }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// ENDE SETUP/////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-// LOOP///////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
+// cyclic loop
 void loop()
 {
-
-  if (PinBT == 0)
-  {
+  if (PinBT == 0) {
     dZeit = (micros() - ZeitS);
-    if (float(dZeit) / 1000 >= float(leseZeit) )
-    {
+    if (float(dZeit) / 1000 >= float(leseZeit) ) {
       SteigenBerechnen();
     }
     if ( Vario >= min_steigen || Vario <= max_sinken) {
@@ -184,25 +166,13 @@ void loop()
       noTone(a_pin1);
     }
   }
-  else
-  {
-    Bloetooth();
+  else {
+    Bluetooth();
   }
 }
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-// ENDE LOOP//////////////////////////////////////////////////////////////////////////////////////////////////////
 
-
-
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//=> Unterfunktionen und Programme   /////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-//////////////////////////////////////////////////////////////////////////////////////////////////////////////////
-
-
-// Luftdrucksensor auslesen ######################################################################################
-// ###############################################################################################################
-void BaroAuslesen()
+// read all available information from external barometer sensor
+static void BaroAuslesen()
 {
 #if BARO == _BARO_MS5611
   Temp = bpm.readTemperature();
@@ -214,21 +184,14 @@ void BaroAuslesen()
   Hoehe = bmp.readAltitude(1013.25); // TODO
 #endif
 }
-// ###############################################################################################################
-// ENDE ##########################################################################################################
 
-
-
-// Steigen berechnen #############################################################################################
-// ###############################################################################################################
-void SteigenBerechnen()
+static void SteigenBerechnen()
 {
   BaroAuslesen();
 
   int i;
 
-  if (startCH == 0)
-  {
+  if (startCH == 0) {
     kal[0] = Hoehe;
     startCH = 1;
   }
@@ -242,7 +205,7 @@ void SteigenBerechnen()
   //VarioR=0.500; // Ton Test ! In normalen Betrieb auskommentieren!  ###################
   //kal[1] = VarioR;
 
-  kal[1] = 0.55 * VarioR + 0.45 * kal[1]; //##############################################
+  kal[1] = 0.55 * VarioR + 0.45 * kal[1];
 
   kal[0] = Hoehe;
 
@@ -250,18 +213,19 @@ void SteigenBerechnen()
   // > Mittelwert bilden.
   AvrgV = 0;
   i = 1;
-  for (i; i <= mittel_n; i++) {
+  for (i; i < AMOUNT_AVG_VALS; i++) {
     AvrgV = AvrgV + kal[i];
   }
-  AvrgV = AvrgV / mittel_n;
+  AvrgV = AvrgV / float(AMOUNT_AVG_VALS - 1);
   AvrgV = (AvrgV  + Vario) / 2;
   // < Mittelwert bilden.
 
-  if (FehlerV > 1.000) FehlerV = 1.000;
+  if (FehlerV > 1.000) {
+    FehlerV = 1.000;
+  }
   Vario = FehlerV * AvrgV + (1 - FehlerV) * Vario;
 
-
-  i = mittel_n;
+  i = AMOUNT_AVG_VALS - 1;
   for (i; i > 1; i--) {
     kal[i] = kal[i - 1];
   }
@@ -286,28 +250,16 @@ void SteigenBerechnen()
 
     Serial.print(Vario, 2);//
     Serial.println(); // */
-
 }
-// ###############################################################################################################
-// ENDE ##########################################################################################################
 
-
-
-// Akku Spannung im % ############################################################################################
-// ###############################################################################################################
-void AkkuVolt()
+static void AkkuVolt()
 {
+  // Akku Spannung im %
   Vbat = analogRead(BatV);
   Batt = 1000.0 + 100.0 * (1 - (4.16 - Vbat * (3.30 / 1023.00) / 0.76904762) / 0.85); //  Ist10k/(Ist3k+Ist10k)=0.76904762
 }
-// #############################################################################################################*/
-// ENDE ##########################################################################################################
 
-
-
-// Piepser #######################################################################################################
-// ###############################################################################################################
-void PiepserX()
+static void PiepserX()
 {
   //Vario = 1.00; // Ton Test! In normalen Betrieb auskommentieren!
 
@@ -319,17 +271,15 @@ void PiepserX()
   duration = long(duration);
 
   // Wenn Steigen groesser als min_steigen
-  if ( Vario >= min_steigen)
-  {
-    if ( (millis() - ZeitPip) >= (unsigned long)(2 * duration) )
-    {
+  if (Vario >= min_steigen) {
+    if ((millis() - ZeitPip) >= (unsigned long)(2 * duration)) {
       ZeitPip = millis();
       tone( a_pin1 , int(frequency), int(duration) );
     }
   }
+  
   // Wenn Sinken kleiner als max_sinken
-  if ( Vario <= max_sinken)
-  {
+  if (Vario <= max_sinken) {
     tone(a_pin1 , 300, 150);
     delay(125);
     tone(a_pin1 , 200, 150);
@@ -338,19 +288,12 @@ void PiepserX()
     delay(175);
   }
 }
-// ###############################################################################################################
-// ENDE ##########################################################################################################
 
-
-
-// Bloetooth #####################################################################################################
-// ###############################################################################################################
-/*  Verschiedene Kommunikationsprotokolle moeglich.  */
-
-void Bloetooth()
+// ###### Bluetooth functionality ######
+// different communitation protocols possible
+static void Bluetooth()
 {
   // Start "Blue Fly Vario" sentence =============================================================================
-  // =============================================================================================================
   /* Ausgabe im BlueFlyVario Format.     The standard BlueFlyVario outp ut mode. This sends raw
     pressure measurements in the form "PRS XXXXX\n": XXXXX is the raw (unfiltered) pressure
     measurement in hexadecimal pascals. */
@@ -371,8 +314,6 @@ void Bloetooth()
     //delay(leseZeitBT - 22); //Wenn XCTrack benutzt wird Zeile aktiv lassen.
 
     // Ende "BlueFlyVario" sentence =========================================================================== */
-
-  // =>>
 
   // Start "LXNAV - LXWP0" sentence ==============================================================================
   // =============================================================================================================
@@ -413,8 +354,6 @@ void Bloetooth()
     delay(leseZeitBT - 73);
 
     // Ende "LXNAV - LXWP0" sentence ========================================================================== */
-
-  // =>>
 
   // Start "LK8EX1" sentence =====================================================================================
   // =============================================================================================================
@@ -478,7 +417,7 @@ void Bloetooth()
   //Serial1.print("$");
   //Serial1.print(s);
   //Serial1.print("*");
-  //Serial1.println(XOR,HEX); //
+  //Serial1.println(XOR,HEX);
 
   delay(leseZeitBT - 30);
   // Ende "LK8EX1" sentence ================================================================================= */
@@ -486,7 +425,6 @@ void Bloetooth()
   // =>>
 
   // Start "Custom BFV" sentence =================================================================================
-  // =============================================================================================================
   /* Custom BFV sentence: This sends a NMEA like sentence in the following format:
 
     "$BFV,pressure(Pa),vario(cm/s), temp(deg C), battery(%),pitotDiffPressure(pa)*checksum\r\n"
@@ -537,9 +475,7 @@ void Bloetooth()
     // Ende "Custom BFV sentence" ============================================================================= */
 
 
-
   // Start Normale Daten Ausgabe =================================================================================
-  // =============================================================================================================
   /*/ On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
 
     // Zum Testen ueber Serial-Port !!!-> nicht vergessen VarioR aus zu kommentieren.
@@ -573,5 +509,3 @@ void Bloetooth()
 
     // Ende Normale Daten Ausgabe ============================================================================= */
 }
-// ###############################################################################################################
-// ENDE ##########################################################################################################
