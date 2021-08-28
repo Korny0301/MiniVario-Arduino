@@ -25,10 +25,17 @@
 // set here the used barometer, install required library via Arduino IDE
 #define BARO _BARO_BMP280
 
+// speaker and led init sequence to show that device is up
+#define INTRO_SEQUENCE 1
+
+
 // variables to adapt
+// define your used pins here, use number definition, e.g. D2 = 2
 const short bt_pin = 2; // Bluetooth Pin definieren. Fuer Leonardo 14. Fuer die Anderen 2
-const int a_pin1 = 6; // Lautsprecher Pin definieren
+const short a_pin1 = 3; // Lautsprecher Pin definieren
 const short BatV = A3; // Akku Spannung Pin definieren
+
+const short PinPowerLed = 2; // Power LED
 
 const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
 const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
@@ -52,6 +59,9 @@ Adafruit_BMP280 bmp; // I2C
 # error Defined barometer not known
 #endif
 
+typedef enum error_state_ {
+  err_baro_init
+}error_state_e;
 
 // global variables
 long Druck, Druck0, DruckB;
@@ -67,19 +77,22 @@ float kal[AMOUNT_AVG_VALS];
 
 // initialization at startup
 void setup() {
+  pinMode(LED_BUILTIN, OUTPUT);
+  pinMode(PinPowerLed, OUTPUT);
+
+  SetStatusLeds(HIGH);
+
   leseZeit = leseZeit - 34;
-  // leseZeit = leseZeit - 34; // Wenn BT Eingebaut ist.
 
   Serial.begin(9600);
-  //Serial1.begin(9600);
+  /*
+    pinMode(bt_pin, INPUT);                 // Definiert den Pin für der BT Schalter.
+    PinBT = digitalRead(bt_pin);            // Definiere SChalter Zustand fuer BT.
+    //PinBT = 0;                            // Wenn keine BT-Modul eingebaut ist. Die obere Zwei auskommentieren.
 
-  pinMode(bt_pin, INPUT);                 // Definiert den Pin für der BT Schalter.
-  PinBT = digitalRead(bt_pin);            // Definiere SChalter Zustand fuer BT.
-  //PinBT = 0;                            // Wenn keine BT-Modul eingebaut ist. Die obere Zwei auskommentieren.
-
-  pinMode(7, OUTPUT);                     // Pin zum BT Versorgung.
-  pinMode(8, OUTPUT);                     // Pin zum BT Versorgung.
-
+    pinMode(7, OUTPUT);                     // Pin zum BT Versorgung.
+    pinMode(8, OUTPUT);                     // Pin zum BT Versorgung.
+  */
 
 #if BARO == _BARO_MS5611
   // Initialize MS5611 sensor!
@@ -89,64 +102,66 @@ void setup() {
   // Low power: MS5611_LOW_POWER
   // Ultra low power: MS5611_ULTRA_LOW_POWER
 
-  while (!bpm.begin(MS5611_ULTRA_HIGH_RES))
-  {
-    delay(500);
+  while (!bpm.begin(MS5611_ULTRA_HIGH_RES)) {
+    ShowErrorState(err_baro_init);
   }
 
 #elif BARO == _BARO_BMP280
-  if (!bmp.begin()) {
-    Serial.println(F("Could not find a valid BMP280 sensor, check wiring or "
-                     "try a different address!"));
-    while (1) delay(10);
+  while (!bmp.begin()) {
+    // Could not find a valid BMP280 sensor
+    ShowErrorState(err_baro_init);
   }
 
-  /* Default settings from datasheet. */
-  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     /* Operating Mode. */
-                  Adafruit_BMP280::SAMPLING_X2,     /* Temp. oversampling */
-                  Adafruit_BMP280::SAMPLING_X16,    /* Pressure oversampling */
-                  Adafruit_BMP280::FILTER_X16,      /* Filtering. */
-                  Adafruit_BMP280::STANDBY_MS_500); /* Standby time. */
+  // Default settings from datasheet.
+  bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     // Operating Mode.
+                  Adafruit_BMP280::SAMPLING_X2,     // Temp. oversampling
+                  Adafruit_BMP280::SAMPLING_X16,    // Pressure oversampling
+                  Adafruit_BMP280::FILTER_X16,      // Filtering
+                  Adafruit_BMP280::STANDBY_MS_500); // Standby time
 #endif
-
+  
   // BT umbenennen START
-  if (PinBT == 1)
-  {
-    digitalWrite(7, HIGH);               // BT Versorgung einschalten.
-    digitalWrite(8, HIGH);               // BT Versorgung einschalten.
-    delay(1000);
-    Serial.begin(9600);                  //fuer MiniPro
-    //Serial1.begin(9600);                 //fuer BT - Leonardo.
-    /*/ On-Off | Hier zwischen // die * entfernen um die BT Name zu aendern.
-      Serial.print("AT");
-      delay(1500);
-      Serial.print("AT+NAMEIvkosVario"); //BT Name vergeben
-      delay(500);
-      //Serial.print("AT+RESET");
-      delay(500);//*/
-    // PIN ist 1234 oder 0000 <= #################################################################################
-  }
-  else
-  {
-    digitalWrite(7, LOW);               // BT Versorgung einschalten.
-    digitalWrite(8, LOW);               // BT Versorgung einschalten.
-  }
+  //  if (PinBT == 1)
+  //  {
+  //    digitalWrite(7, HIGH);               // BT Versorgung einschalten.
+  //    digitalWrite(8, HIGH);               // BT Versorgung einschalten.
+  //    delay(1000);
+  //    Serial.begin(9600);                  //fuer MiniPro
+  //    //Serial1.begin(9600);                 //fuer BT - Leonardo.
+  //    / On-Off | Hier zwischen // die * entfernen um die BT Name zu aendern.
+  //      Serial.print("AT");
+  //      delay(1500);
+  //      Serial.print("AT+NAMEIvkosVario"); //BT Name vergeben
+  //      delay(500);
+  //      //Serial.print("AT+RESET");
+  //      delay(500);//
+  //    // PIN ist 1234 oder 0000 <= #################################################################################
+  //  }
+  //  else
+  //  {
+  //    digitalWrite(7, LOW);               // BT Versorgung einschalten.
+  //    digitalWrite(8, LOW);               // BT Versorgung einschalten.
+  //  }
   //BT umbenennen ENDE
 
 
+#if INTRO_SEQUENCE
   // Spielt die Start-Tonfolge.
-  tone(a_pin1 , 100, 150);
+  tone(a_pin1, 100, 150);
   delay(200);
-  tone(a_pin1 , 200, 150);
+  tone(a_pin1, 200, 150);
   delay(200);
-  tone(a_pin1 , 400, 150);
+  tone(a_pin1, 400, 150);
   delay(200);
-  tone(a_pin1 , 700, 150);
+  tone(a_pin1, 700, 150);
+  SetStatusLeds(LOW);
   delay(200);
-  tone(a_pin1 , 1100, 150);
+  tone(a_pin1, 1100, 150);
   delay(200);
-  tone(a_pin1 , 1600, 150);
+  tone(a_pin1, 1600, 150);
   delay(200);
+  SetStatusLeds(HIGH);
+#endif
 
   ZeitS = micros();
 }
@@ -154,7 +169,7 @@ void setup() {
 // cyclic loop
 void loop()
 {
-  if (PinBT == 0) {
+  /*if (PinBT == 0) {
     dZeit = (micros() - ZeitS);
     if (float(dZeit) / 1000 >= float(leseZeit) ) {
       SteigenBerechnen();
@@ -165,10 +180,35 @@ void loop()
     else {
       noTone(a_pin1);
     }
-  }
-  else {
+    }
+    else {
     Bluetooth();
+    }
+  */
+}
+
+static void SetStatusLeds(int state)
+{
+  digitalWrite(LED_BUILTIN, state);
+  digitalWrite(PinPowerLed, state);
+}
+
+static void ShowErrorState(error_state_e err)
+{
+  int durationLow = 250;
+  int durationHigh = 250;
+  
+  switch(err) {
+    case err_baro_init:
+      durationLow = 100;
+      durationHigh = 100;
+      break;
   }
+  
+  SetStatusLeds(LOW);
+  delay(durationLow);
+  SetStatusLeds(HIGH);
+  delay(durationHigh);
 }
 
 // read all available information from external barometer sensor
@@ -277,7 +317,7 @@ static void PiepserX()
       tone( a_pin1 , int(frequency), int(duration) );
     }
   }
-  
+
   // Wenn Sinken kleiner als max_sinken
   if (Vario <= max_sinken) {
     tone(a_pin1 , 300, 150);
