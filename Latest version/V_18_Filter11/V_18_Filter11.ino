@@ -19,15 +19,27 @@
 //! library: https://github.com/adafruit/Adafruit_BMP280_Library
 #define _BARO_BMP280 2
 
+// add further batteries here and in battery level calculation routine
+#define BATTERY_1S 1
+
 // ###################################################
 // ###### ADAPTION AREA: adapt your config here ######
 
 // set here the used barometer, install required library via Arduino IDE
 #define BARO _BARO_BMP280
 
+#define USED_BATTERY BATTERY_1S
+
 // speaker and led init sequence to show that device is up
 #define INTRO_SEQUENCE 1
 
+#define DEBUG_BARO_READ 0
+#define DEBUG_RISE_CALCULATION 0
+#define DEBUG_BATTERY_VOLTAGE 1
+
+#define ARRAYSIZE(x) sizeof(x)/sizeof(x[0])
+
+#define SEALEVELPRESSURE_HPA 1013.25
 
 // variables to adapt
 // define your used pins here, use number definition, e.g. D2 = 2
@@ -37,14 +49,22 @@ const short BatV = A3; // Akku Spannung Pin definieren
 
 const short PinPowerLed = 2; // Power LED
 
+const float V_ref = 5.17; // measured voltage, should be 5V
+
+// I2C address for BMP280 barometer
+const short BMP280_BaroI2cAddress = 0x76;
+
 const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
 const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
 
-long leseZeit = 125; // Interval zum lesen vom Baro audio Vario, Standard(min) ist 150
+long leseZeit_ms = 125; // Interval zum lesen vom Baro audio Vario, Standard(min) ist 150
 const long leseZeitBT = 100; // Interval zum lesen vom Baro fuer BT, Standard(min) ist 100
+const long CycleTimeBattery_ms = 10000;
 
 // Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
 float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
+
+const short PowerLevelStages = 5;
 
 // ###################################################
 // ######         END OF ADAPTION AREA          ######
@@ -53,23 +73,26 @@ float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 
 # include <MS5611.h>
 MS5611 bpm;
 #elif BARO == _BARO_BMP280
+# include <Adafruit_Sensor.h>
 # include <Adafruit_BMP280.h>
 Adafruit_BMP280 bmp; // I2C
 #else
 # error Defined barometer not known
 #endif
 
+//! error number is indicated by state LED
 typedef enum error_state_ {
-  err_baro_init
+  err_baro_init_MS5611 = 1,
+  err_baro_init_BMP280,
 }error_state_e;
 
 // global variables
 long Druck, Druck0, DruckB;
 
-int PinBT,  XOR, c, startCH = 0, Vbat;
-float Vario, VarioR, Hoehe, AvrgV, Batt, Temp;
+int PinBT, XOR, c, startCH = 0, Vbat;
+float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
 
-unsigned long  dZeit, ZeitE, ZeitS, ZeitPip;
+unsigned long dZeit, ZeitE, ZeitS, ZeitPip;
 
 #define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
 float kal[AMOUNT_AVG_VALS];
@@ -82,9 +105,12 @@ void setup() {
 
   SetStatusLeds(HIGH);
 
-  leseZeit = leseZeit - 34;
+  analogReference(DEFAULT); // default equals external voltage, here 5V
+
+  leseZeit_ms = leseZeit_ms - 34;
 
   Serial.begin(9600);
+  Serial.println("Starting mini vario project...");
   /*
     pinMode(bt_pin, INPUT);                 // Definiert den Pin für der BT Schalter.
     PinBT = digitalRead(bt_pin);            // Definiere SChalter Zustand fuer BT.
@@ -103,13 +129,15 @@ void setup() {
   // Ultra low power: MS5611_ULTRA_LOW_POWER
 
   while (!bpm.begin(MS5611_ULTRA_HIGH_RES)) {
-    ShowErrorState(err_baro_init);
+    Serial.println("Error: Could not initialize MS5611 sensor");
+    ShowErrorState(err_baro_init_MS5611);
   }
 
 #elif BARO == _BARO_BMP280
-  while (!bmp.begin()) {
+  while (!bmp.begin(BMP280_BaroI2cAddress)) {
     // Could not find a valid BMP280 sensor
-    ShowErrorState(err_baro_init);
+    Serial.println("Error: Could not initialize BMP280 sensor");
+    ShowErrorState(err_baro_init_BMP280);
   }
 
   // Default settings from datasheet.
@@ -161,7 +189,14 @@ void setup() {
   tone(a_pin1, 1600, 150);
   delay(200);
   SetStatusLeds(HIGH);
+
+  AkkuVolt(); // read battery level once at startup
+  for (int i = 0; i < PowerLevelStages; ++i) {
+    // TODO create blink code for power level
+  }
 #endif
+
+  Serial.println("Initialization done.");
 
   ZeitS = micros();
 }
@@ -169,22 +204,32 @@ void setup() {
 // cyclic loop
 void loop()
 {
-  /*if (PinBT == 0) {
-    dZeit = (micros() - ZeitS);
-    if (float(dZeit) / 1000 >= float(leseZeit) ) {
-      SteigenBerechnen();
+  static unsigned long lastTimeDiffBattery_us;
+  static unsigned long lastTimeDiff_us;
+  unsigned long diff_us;
+  unsigned long timeNow_us = micros();
+  
+  if ((diff_us = timeNow_us - lastTimeDiffBattery_us) / 1000 >= CycleTimeBattery_ms) {
+    AkkuVolt();
+    lastTimeDiffBattery_us = timeNow_us;
+  }
+    
+  //if (PinBT == 0) {
+    if ((diff_us = timeNow_us - lastTimeDiff_us) / 1000 >= leseZeit_ms) {
+      BaroAuslesen();
+      SteigenBerechnen(diff_us);
+      lastTimeDiff_us = timeNow_us;
     }
-    if ( Vario >= min_steigen || Vario <= max_sinken) {
+    if (Vario >= min_steigen || Vario <= max_sinken) {
       PiepserX();
     }
     else {
       noTone(a_pin1);
     }
-    }
-    else {
-    Bluetooth();
-    }
-  */
+  //}
+  //else {
+  //  Bluetooth();
+  //}
 }
 
 static void SetStatusLeds(int state)
@@ -195,20 +240,20 @@ static void SetStatusLeds(int state)
 
 static void ShowErrorState(error_state_e err)
 {
-  int durationLow = 250;
-  int durationHigh = 250;
-  
-  switch(err) {
-    case err_baro_init:
-      durationLow = 100;
-      durationHigh = 100;
-      break;
-  }
-  
+  const int durationWait = 1000;
+  const int durationLow = 150;
+  const int durationHigh = 350;
+
   SetStatusLeds(LOW);
-  delay(durationLow);
-  SetStatusLeds(HIGH);
-  delay(durationHigh);
+  delay(durationWait);
+  
+  int amountBlinks = err;
+  while (amountBlinks--) {
+    SetStatusLeds(HIGH);
+    delay(durationHigh);
+    SetStatusLeds(LOW);
+    delay(durationLow);
+  }
 }
 
 // read all available information from external barometer sensor
@@ -221,14 +266,20 @@ static void BaroAuslesen()
 #elif BARO == _BARO_BMP280
   Temp = bmp.readTemperature();
   Druck = bmp.readPressure();
-  Hoehe = bmp.readAltitude(1013.25); // TODO
+  Hoehe = bmp.readAltitude(SEALEVELPRESSURE_HPA);
+#endif
+#if DEBUG_BARO_READ
+  Serial.print("Baro: temp=");
+  Serial.print(Temp);
+  Serial.print(", pressure=");
+  Serial.print(Druck);
+  Serial.print(", height=");
+  Serial.println(Hoehe);
 #endif
 }
 
-static void SteigenBerechnen()
+static void SteigenBerechnen(float timeDiff_us)
 {
-  BaroAuslesen();
-
   int i;
 
   if (startCH == 0) {
@@ -237,10 +288,7 @@ static void SteigenBerechnen()
   }
 
   // Steigwerte berechnen.
-  dZeit = (micros() - ZeitS);
-  ZeitS = micros();
-
-  VarioR = ((Hoehe - kal[0]) / (float(dZeit) / 1000000));
+  VarioR = ((Hoehe - kal[0]) / (timeDiff_us / 1000000));
 
   //VarioR=0.500; // Ton Test ! In normalen Betrieb auskommentieren!  ###################
   //kal[1] = VarioR;
@@ -270,33 +318,73 @@ static void SteigenBerechnen()
     kal[i] = kal[i - 1];
   }
 
-  //BT Taster;dZeit[ms];Druck[Pa];Hoehe[m];VarioR[m/s];Vario[m/s]
-  /*/  Zum aktivieren der Ausgabe * zwischen // loeschen.
-
-    Serial.print(PinBT);
-    Serial.print("; ");
-
-    Serial.print(float(dZeit) / 1000, 2);
-    Serial.print("; ");
-
-    Serial.print(Druck);
-    Serial.print("; ");
-
-    Serial.print(Hoehe, 2);
-    Serial.print("; ");
-
-    Serial.print(VarioR, 2);
-    Serial.print("; ");
-
-    Serial.print(Vario, 2);//
-    Serial.println(); // */
+#if DEBUG_RISE_CALCULATION
+  Serial.print("BT_BTN=");
+  Serial.print(PinBT);
+  
+  Serial.print("; dZeit[ms]=");
+  Serial.print(float(timeDiff_us) / 1000, 2);
+  
+  Serial.print("; pres[Pa]=");
+  Serial.print(Druck);
+  
+  Serial.print("; h[m]=");
+  Serial.print(Hoehe, 2);
+  
+  Serial.print("; VarioR[m/s]=");
+  Serial.print(VarioR, 2);
+  
+  Serial.print("; Vario[m/s]=");
+  Serial.println(Vario, 2);
+#endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
 }
 
 static void AkkuVolt()
 {
-  // Akku Spannung im %
+  // typical values to convert the available voltage into capacity
+  const struct {
+    unsigned short percent;
+    float voltage;
+  } capacity2voltage[] = {
+#if USED_BATTERY == BATTERY_1S // this is only for 3.7V lipos (1S)
+    { 100, 4.20 },
+    {  90, 4.11 },
+    {  80, 4.02 },
+    {  70, 3.95 },
+    {  60, 3.87 },
+    {  50, 3.84 },
+    {  40, 3.80 },
+    {  30, 3.77 },
+    {  20, 3.73 },
+    {  10, 3.69 },
+    {   0, 3.27 },
+#else
+# error Used battery is not defined with it's capacity levels
+#endif
+  };
+  
   Vbat = analogRead(BatV);
-  Batt = 1000.0 + 100.0 * (1 - (4.16 - Vbat * (3.30 / 1023.00) / 0.76904762) / 0.85); //  Ist10k/(Ist3k+Ist10k)=0.76904762
+  const float batt_voltage = Vbat * (V_ref / 1023.00);
+  
+  Battery_perc = 0;
+  for (int i = 0; i < ARRAYSIZE(capacity2voltage); ++i) {
+    if (batt_voltage >= capacity2voltage[i].voltage) {
+      Battery_perc = capacity2voltage[i].percent;
+      if (i > 0) {
+        Battery_perc += 10.0 * (batt_voltage - capacity2voltage[i].voltage) / (capacity2voltage[i - 1].voltage - capacity2voltage[i].voltage);
+      }
+      break;
+    }
+  }
+#if DEBUG_BATTERY_VOLTAGE
+  Serial.print("Battery: analog=");
+  Serial.print(Vbat);
+  Serial.print(", batt=");
+  Serial.print(batt_voltage);
+  Serial.print("[V] = ");
+  Serial.print(Battery_perc);
+  Serial.println("[%]");
+#endif
 }
 
 static void PiepserX()
@@ -314,7 +402,7 @@ static void PiepserX()
   if (Vario >= min_steigen) {
     if ((millis() - ZeitPip) >= (unsigned long)(2 * duration)) {
       ZeitPip = millis();
-      tone( a_pin1 , int(frequency), int(duration) );
+      tone(a_pin1 , int(frequency), int(duration) );
     }
   }
 
@@ -427,12 +515,10 @@ static void Bluetooth()
   // On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
   //    Temp = bpm.readTemperature(true);
   //    Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
-  BaroAuslesen();
   //SteigenBerechnen();
-  AkkuVolt();
 
   String s = "LK8EX1,";
-  s = String(s + String(Druck, DEC) + ",99999,9999," + String(Temp, 1) + "," + String(Batt, 0) + ",");
+  s = String(s + String(Druck, DEC) + ",99999,9999," + String(Temp, 1) + "," + String(Battery_perc, 0) + ",");
 
   // Checksum berechnen und als int ausgeben
   // wird als HEX benötigt im NMEA Datensatz
@@ -484,7 +570,7 @@ static void Bluetooth()
       String s = "BFV,";
       //s = String(s + String(Druck,DEC) + "," + String(Vario*100,DEC) + "," + String(Temp,2) + ",");
       s = String(s + String(Druck,DEC) + ",," + String(Temp,2) + ",");
-      s = String(s + String(Batt,DEC) + "," );
+      s = String(s + String(Battery_perc,DEC) + "," );
 
     // Checksum berechnen
     // und als int ausgeben wird als HEX benötigt.
@@ -545,7 +631,7 @@ static void Bluetooth()
     Serial.print(PinBT);
     Serial.println();
 
-    delay(leseZeit - 4);
+    delay(leseZeit_ms - 4);
 
     // Ende Normale Daten Ausgabe ============================================================================= */
 }
