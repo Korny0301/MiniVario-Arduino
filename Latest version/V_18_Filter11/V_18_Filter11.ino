@@ -62,7 +62,7 @@ const long leseZeitBT = 100; // Interval zum lesen vom Baro fuer BT, Standard(mi
 const long CycleTimeBattery_ms = 10000;
 
 // Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
-float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
+const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
 
 const short PowerLevelStages = 5;
 
@@ -89,7 +89,7 @@ typedef enum error_state_ {
 // global variables
 long Druck, Druck0, DruckB;
 
-int PinBT, XOR, c, startCH = 0, Vbat;
+int PinBT, XOR, c, Vbat;
 float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
 
 unsigned long dZeit, ZeitE, ZeitS, ZeitPip;
@@ -280,11 +280,10 @@ static void BaroAuslesen()
 
 static void SteigenBerechnen(float timeDiff_us)
 {
-  int i;
-
-  if (startCH == 0) {
+  static int startCh = 0;
+  if (!startCh) {
     kal[0] = Hoehe;
-    startCH = 1;
+    startCh = 1;
   }
 
   // Steigwerte berechnen.
@@ -300,21 +299,17 @@ static void SteigenBerechnen(float timeDiff_us)
   // Filter fuer die Steigung anwenden.
   // > Mittelwert bilden.
   AvrgV = 0;
-  i = 1;
-  for (i; i < AMOUNT_AVG_VALS; i++) {
-    AvrgV = AvrgV + kal[i];
+  for (int i = 1; i < AMOUNT_AVG_VALS; i++) {
+    AvrgV += kal[i];
   }
-  AvrgV = AvrgV / float(AMOUNT_AVG_VALS - 1);
-  AvrgV = (AvrgV  + Vario) / 2;
+  AvrgV = AvrgV / (AMOUNT_AVG_VALS - 1);
+  AvrgV = (AvrgV + Vario) / 2;
   // < Mittelwert bilden.
 
-  if (FehlerV > 1.000) {
-    FehlerV = 1.000;
-  }
-  Vario = FehlerV * AvrgV + (1 - FehlerV) * Vario;
+  float errFactor = FehlerV > 1.0 ? 1.0 : FehlerV;
+  Vario = errFactor * AvrgV + (1 - errFactor) * Vario;
 
-  i = AMOUNT_AVG_VALS - 1;
-  for (i; i > 1; i--) {
+  for (int i = AMOUNT_AVG_VALS - 1; i > 1; i--) {
     kal[i] = kal[i - 1];
   }
 
@@ -359,7 +354,7 @@ static void AkkuVolt()
     {  10, 3.69 },
     {   0, 3.27 },
 #else
-# error Used battery is not defined with it's capacity levels
+# error Used battery is not defined with it's capacity levels, do some internet research to find other tables
 #endif
   };
   
@@ -368,9 +363,10 @@ static void AkkuVolt()
   
   Battery_perc = 0;
   for (int i = 0; i < ARRAYSIZE(capacity2voltage); ++i) {
-    if (batt_voltage >= capacity2voltage[i].voltage) {
+    if (batt_voltage >= capacity2voltage[i].voltage) { // found sampling point of battery voltage in constant table
       Battery_perc = capacity2voltage[i].percent;
       if (i > 0) {
+        // interpolate between sampling points
         Battery_perc += 10.0 * (batt_voltage - capacity2voltage[i].voltage) / (capacity2voltage[i - 1].voltage - capacity2voltage[i].voltage);
       }
       break;
