@@ -33,6 +33,11 @@
 // speaker and led init sequence to show that device is up
 #define INTRO_SEQUENCE 1
 
+#define DEBUG_NO_TONE 1
+#if DEBUG_NO_TONE
+#define tone(x, y, z)
+#endif
+
 #define DEBUG_BARO_READ 0
 #define DEBUG_RISE_CALCULATION 0
 #define DEBUG_BATTERY_VOLTAGE 1
@@ -60,6 +65,10 @@ const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
 long leseZeit_ms = 125; // Interval zum lesen vom Baro audio Vario, Standard(min) ist 150
 const long leseZeitBT = 100; // Interval zum lesen vom Baro fuer BT, Standard(min) ist 100
 const long CycleTimeBattery_ms = 10000;
+
+// after this amount of milliseconds the status led is going to blink for the given duration
+const long CycleTimeBlinkAlive_ms = 3000;
+const long BlinkAliveDuration_ms = 100;
 
 // Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
 const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
@@ -92,7 +101,7 @@ long Druck, Druck0, DruckB;
 int PinBT, XOR, c, Vbat;
 float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
 
-unsigned long dZeit, ZeitE, ZeitS, ZeitPip;
+unsigned long dZeit;
 
 #define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
 float kal[AMOUNT_AVG_VALS];
@@ -103,7 +112,7 @@ void setup() {
   pinMode(LED_BUILTIN, OUTPUT);
   pinMode(PinPowerLed, OUTPUT);
 
-  SetStatusLeds(HIGH);
+  SetStatusLeds(LOW);
 
   analogReference(DEFAULT); // default equals external voltage, here 5V
 
@@ -182,43 +191,58 @@ void setup() {
   tone(a_pin1, 400, 150);
   delay(200);
   tone(a_pin1, 700, 150);
-  SetStatusLeds(LOW);
   delay(200);
   tone(a_pin1, 1100, 150);
   delay(200);
   tone(a_pin1, 1600, 150);
   delay(200);
-  SetStatusLeds(HIGH);
 
   AkkuVolt(); // read battery level once at startup
-  for (int i = 0; i < PowerLevelStages; ++i) {
-    // TODO create blink code for power level
-  }
+  int batteryStage = (Battery_perc / 100.0) * PowerLevelStages;
+  Serial.print("BatteryLevelStage = ");
+  Serial.print(batteryStage);
+  Serial.print(" / ");
+  Serial.println(PowerLevelStages);
+  BlinkLedState(batteryStage);
 #endif
 
   Serial.println("Initialization done.");
-
-  ZeitS = micros();
 }
 
 // cyclic loop
 void loop()
 {
-  static unsigned long lastTimeDiffBattery_us;
-  static unsigned long lastTimeDiff_us;
-  unsigned long diff_us;
-  unsigned long timeNow_us = micros();
+  static bool start = true;
+  static unsigned long lastTimeDiffBattery_ms;
+  static unsigned long lastTimeBlinkAlive_ms;
+  static unsigned long lastTimeDiff_ms;
+  unsigned long diff_ms;
+  unsigned long timeNow_ms = micros() / 1000;
+
+  if (start) {
+    // start blinking after waiting the very first cycle time for enough off 
+    // time after power state blinking
+    lastTimeBlinkAlive_ms = timeNow_ms;
+  }
   
-  if ((diff_us = timeNow_us - lastTimeDiffBattery_us) / 1000 >= CycleTimeBattery_ms) {
+  if ((timeNow_ms - lastTimeDiffBattery_ms) >= CycleTimeBattery_ms) {
     AkkuVolt();
-    lastTimeDiffBattery_us = timeNow_us;
+    lastTimeDiffBattery_ms = timeNow_ms;
+  }
+
+  if ((timeNow_ms - lastTimeBlinkAlive_ms) >= CycleTimeBlinkAlive_ms) {
+    SetStatusLeds(HIGH);
+    lastTimeBlinkAlive_ms = timeNow_ms;
+  }
+  else if ((timeNow_ms - lastTimeBlinkAlive_ms) >= BlinkAliveDuration_ms) {
+    SetStatusLeds(LOW);
   }
     
   //if (PinBT == 0) {
-    if ((diff_us = timeNow_us - lastTimeDiff_us) / 1000 >= leseZeit_ms) {
+    if ((diff_ms = timeNow_ms - lastTimeDiff_ms) >= leseZeit_ms) {
       BaroAuslesen();
-      SteigenBerechnen(diff_us);
-      lastTimeDiff_us = timeNow_us;
+      SteigenBerechnen(diff_ms);
+      lastTimeDiff_ms = timeNow_ms;
     }
     if (Vario >= min_steigen || Vario <= max_sinken) {
       PiepserX();
@@ -230,12 +254,27 @@ void loop()
   //else {
   //  Bluetooth();
   //}
+
+  start = false;
 }
 
 static void SetStatusLeds(int state)
 {
   digitalWrite(LED_BUILTIN, state);
   digitalWrite(PinPowerLed, state);
+}
+
+static void BlinkLedState(int amountBlinks)
+{
+  const int durationLow = 150;
+  const int durationHigh = 350;
+  
+  while (amountBlinks--) {
+    SetStatusLeds(HIGH);
+    delay(durationHigh);
+    SetStatusLeds(LOW);
+    delay(durationLow);
+  }
 }
 
 static void ShowErrorState(error_state_e err)
@@ -247,13 +286,7 @@ static void ShowErrorState(error_state_e err)
   SetStatusLeds(LOW);
   delay(durationWait);
   
-  int amountBlinks = err;
-  while (amountBlinks--) {
-    SetStatusLeds(HIGH);
-    delay(durationHigh);
-    SetStatusLeds(LOW);
-    delay(durationLow);
-  }
+  BlinkLedState(err);
 }
 
 // read all available information from external barometer sensor
@@ -278,7 +311,7 @@ static void BaroAuslesen()
 #endif
 }
 
-static void SteigenBerechnen(float timeDiff_us)
+static void SteigenBerechnen(float timeDiff_ms)
 {
   static int startCh = 0;
   if (!startCh) {
@@ -287,7 +320,7 @@ static void SteigenBerechnen(float timeDiff_us)
   }
 
   // Steigwerte berechnen.
-  VarioR = ((Hoehe - kal[0]) / (timeDiff_us / 1000000));
+  VarioR = ((Hoehe - kal[0]) / (timeDiff_ms / 1000));
 
   //VarioR=0.500; // Ton Test ! In normalen Betrieb auskommentieren!  ###################
   //kal[1] = VarioR;
@@ -318,7 +351,7 @@ static void SteigenBerechnen(float timeDiff_us)
   Serial.print(PinBT);
   
   Serial.print("; dZeit[ms]=");
-  Serial.print(float(timeDiff_us) / 1000, 2);
+  Serial.print(timeDiff_ms, 2);
   
   Serial.print("; pres[Pa]=");
   Serial.print(Druck);
@@ -385,6 +418,8 @@ static void AkkuVolt()
 
 static void PiepserX()
 {
+  static unsigned long timeBeep;
+  
   //Vario = 1.00; // Ton Test! In normalen Betrieb auskommentieren!
 
   float frequency = -0.33332 * Vario * Vario * Vario * Vario + 9.54324 * Vario * Vario * Vario - 102.64693 * Vario * Vario + 512.227 * Vario + 84.38465;
@@ -396,8 +431,8 @@ static void PiepserX()
 
   // Wenn Steigen groesser als min_steigen
   if (Vario >= min_steigen) {
-    if ((millis() - ZeitPip) >= (unsigned long)(2 * duration)) {
-      ZeitPip = millis();
+    if ((millis() - timeBeep) >= (unsigned long)(2 * duration)) {
+      timeBeep = millis();
       tone(a_pin1 , int(frequency), int(duration) );
     }
   }
