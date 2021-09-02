@@ -5,9 +5,9 @@
    Adapted by Korny0301/MiniVario-Arduino
 
    Features:
-    Bluetooth Modul H-06
+    Bluetooth Modul HC-06, HC-05
     Barometer Modul MS5611 or BMP280
-    any Arduino board, tested with Arduino Nano
+    any Arduino board, tested with Arduino Nano, BMP280, HC-05
 
  *******************************************************************/
 
@@ -45,15 +45,24 @@
 
 // variables to adapt
 // define your used pins here, use number definition, e.g. D2 = 2
-const short PinPowerLed = 2; // Power LED
-const short PinSpeaker = 3; // Lautsprecher Pin definieren
-const short PinBluetoothEnabled = 4; // Bluetooth is enabled pin
-const short PinBattery_analog = A3; // Akku Spannung Pin definieren
+// pin for additional LED that shows alive state and battery level at startup
+const short PinPowerLed = 2;
+
+// pin for external speaker/beeper/buzzer
+const short PinSpeaker = 3;
+
+// pin that defines if bluetooth should be enabled
+const short PinBluetoothEnabled = 4;
+
+// pin to measure analog voltage of attached battery
+const short PinBattery_analog = A3;
 
 const float V_ref = 5.17; // measured voltage, should be 5V
 
 // I2C address for BMP280 barometer
 const short BMP280_BaroI2cAddress = 0x76;
+
+const char* BluetoothName = "Korio";
 
 const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
 const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
@@ -78,6 +87,13 @@ const short PowerLevelStages = 5;
 #define tone(x, y, z)
 #endif
 
+#define DEBUG_PRINT(x)           do { if (!BluetoothEnabled) { Serial.print(x); }} while(0)
+#define DEBUG_PRINTLN(x)         do { if (!BluetoothEnabled) { Serial.println(x); }} while(0)
+#define BLUETOOTH_PRINT(x)       do { if (BluetoothEnabled) { Serial.print(x); }} while(0)
+#define BLUETOOTH_PRINTA(x, a)   do { if (BluetoothEnabled) { Serial.print(x, a); }} while(0)
+#define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { Serial.println(x); }} while(0)
+#define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { Serial.println(x, a); }} while(0)
+
 #if BARO == _BARO_MS5611
 # include <MS5611.h>
 MS5611 bpm;
@@ -98,7 +114,8 @@ typedef enum error_state_ {
 // global variables
 long Druck, Druck0, DruckB;
 
-int PinBT, XOR, c, Vbat;
+bool BluetoothEnabled = false;
+int XOR, c, Vbat;
 float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
 
 unsigned long dZeit;
@@ -116,19 +133,18 @@ void setup() {
 
   analogReference(DEFAULT); // default equals external voltage, here 5V
 
-  leseZeit_ms = leseZeit_ms - 34;
+  pinMode(PinBluetoothEnabled, INPUT);                 
+  BluetoothEnabled = digitalRead(PinBluetoothEnabled);
 
+  // for debug print to PC or for bluetooth
   Serial.begin(9600);
-  Serial.println("Starting mini vario project...");
-  /*
-    pinMode(PinBluetoothEnabled, INPUT);                 // Definiert den Pin für der BT Schalter.
-    PinBT = digitalRead(PinBluetoothEnabled);            // Definiere SChalter Zustand fuer BT.
-    //PinBT = 0;                            // Wenn keine BT-Modul eingebaut ist. Die obere Zwei auskommentieren.
-
-    pinMode(7, OUTPUT);                     // Pin zum BT Versorgung.
-    pinMode(8, OUTPUT);                     // Pin zum BT Versorgung.
-  */
-
+  
+  leseZeit_ms = leseZeit_ms - 34;
+  
+  DEBUG_PRINTLN("Starting mini vario project...");
+  DEBUG_PRINT("Bluetooth: ");
+  DEBUG_PRINTLN(BluetoothEnabled ? "enabled" : "disabled");
+  
 #if BARO == _BARO_MS5611
   // Initialize MS5611 sensor!
   // Ultra high resolution: MS5611_ULTRA_HIGH_RES
@@ -138,14 +154,14 @@ void setup() {
   // Ultra low power: MS5611_ULTRA_LOW_POWER
 
   while (!bpm.begin(MS5611_ULTRA_HIGH_RES)) {
-    Serial.println("Error: Could not initialize MS5611 sensor");
+    DEBUG_PRINTLN("Error: Could not initialize MS5611 sensor");
     ShowErrorState(err_baro_init_MS5611);
   }
 
 #elif BARO == _BARO_BMP280
   while (!bmp.begin(BMP280_BaroI2cAddress)) {
     // Could not find a valid BMP280 sensor
-    Serial.println("Error: Could not initialize BMP280 sensor");
+    DEBUG_PRINTLN("Error: Could not initialize BMP280 sensor");
     ShowErrorState(err_baro_init_BMP280);
   }
 
@@ -156,31 +172,6 @@ void setup() {
                   Adafruit_BMP280::FILTER_X16,      // Filtering
                   Adafruit_BMP280::STANDBY_MS_500); // Standby time
 #endif
-  
-  // BT umbenennen START
-  //  if (PinBT == 1)
-  //  {
-  //    digitalWrite(7, HIGH);               // BT Versorgung einschalten.
-  //    digitalWrite(8, HIGH);               // BT Versorgung einschalten.
-  //    delay(1000);
-  //    Serial.begin(9600);                  //fuer MiniPro
-  //    //Serial1.begin(9600);                 //fuer BT - Leonardo.
-  //    / On-Off | Hier zwischen // die * entfernen um die BT Name zu aendern.
-  //      Serial.print("AT");
-  //      delay(1500);
-  //      Serial.print("AT+NAMEIvkosVario"); //BT Name vergeben
-  //      delay(500);
-  //      //Serial.print("AT+RESET");
-  //      delay(500);//
-  //    // PIN ist 1234 oder 0000 <= #################################################################################
-  //  }
-  //  else
-  //  {
-  //    digitalWrite(7, LOW);               // BT Versorgung einschalten.
-  //    digitalWrite(8, LOW);               // BT Versorgung einschalten.
-  //  }
-  //BT umbenennen ENDE
-
 
 #if INTRO_SEQUENCE
   // Spielt die Start-Tonfolge.
@@ -199,14 +190,25 @@ void setup() {
 
   AkkuVolt(); // read battery level once at startup
   int batteryStage = (Battery_perc / 100.0) * (PowerLevelStages + 1);
-  Serial.print("BatteryLevelStage = ");
-  Serial.print(batteryStage);
-  Serial.print(" / ");
-  Serial.println(PowerLevelStages);
+  DEBUG_PRINT("BatteryLevelStage = ");
+  DEBUG_PRINT(batteryStage);
+  DEBUG_PRINT(" / ");
+  DEBUG_PRINTLN(PowerLevelStages);
   BlinkLedState(batteryStage);
 #endif
 
-  Serial.println("Initialization done.");
+  // rename bluetooth device
+  if (BluetoothEnabled) {
+      BLUETOOTH_PRINT("AT");
+      delay(1500);
+      BLUETOOTH_PRINT("AT+NAME");
+      BLUETOOTH_PRINT(BluetoothName); // set new bluetooth name
+      delay(500);
+      //BLUETOOTH_PRINT("AT+RESET");
+      delay(500);//
+  }
+
+  DEBUG_PRINTLN("Initialization done.");
 }
 
 // cyclic loop
@@ -216,6 +218,7 @@ void loop()
   static unsigned long lastTimeDiffBattery_ms;
   static unsigned long lastTimeBlinkAlive_ms;
   static unsigned long lastTimeDiff_ms;
+  static unsigned long lastTimeBluetooth_ms;
   unsigned long diff_ms;
   unsigned long timeNow_ms = micros() / 1000;
 
@@ -238,22 +241,24 @@ void loop()
     SetStatusLeds(LOW);
   }
     
-  //if (PinBT == 0) {
-    if ((diff_ms = timeNow_ms - lastTimeDiff_ms) >= leseZeit_ms) {
-      BaroAuslesen();
-      SteigenBerechnen(diff_ms);
-      lastTimeDiff_ms = timeNow_ms;
+  if ((diff_ms = timeNow_ms - lastTimeDiff_ms) >= leseZeit_ms) {
+    BaroAuslesen();
+    SteigenBerechnen(diff_ms);
+    lastTimeDiff_ms = timeNow_ms;
+  }
+  if (Vario >= min_steigen || Vario <= max_sinken) {
+    PiepserX();
+  }
+  else {
+    noTone(PinSpeaker);
+  }
+  
+  if (BluetoothEnabled) {
+    if ((timeNow_ms - lastTimeBluetooth_ms) >= leseZeitBT) {
+      Bluetooth();
+      lastTimeBluetooth_ms = timeNow_ms;
     }
-    if (Vario >= min_steigen || Vario <= max_sinken) {
-      PiepserX();
-    }
-    else {
-      noTone(PinSpeaker);
-    }
-  //}
-  //else {
-  //  Bluetooth();
-  //}
+  }
 
   start = false;
 }
@@ -302,12 +307,12 @@ static void BaroAuslesen()
   Hoehe = bmp.readAltitude(SEALEVELPRESSURE_HPA);
 #endif
 #if DEBUG_BARO_READ
-  Serial.print("Baro: temp=");
-  Serial.print(Temp);
-  Serial.print(", pressure=");
-  Serial.print(Druck);
-  Serial.print(", height=");
-  Serial.println(Hoehe);
+  DEBUG_PRINT("Baro: temp=");
+  DEBUG_PRINT(Temp);
+  DEBUG_PRINT(", pressure=");
+  DEBUG_PRINT(Druck);
+  DEBUG_PRINT(", height=");
+  DEBUG_PRINTLN(Hoehe);
 #endif
 }
 
@@ -347,23 +352,23 @@ static void SteigenBerechnen(float timeDiff_ms)
   }
 
 #if DEBUG_RISE_CALCULATION
-  Serial.print("BT_BTN=");
-  Serial.print(PinBT);
+  DEBUG_PRINT("BT_BTN=");
+  DEBUG_PRINT(BluetoothEnabled);
   
-  Serial.print("; dZeit[ms]=");
-  Serial.print(timeDiff_ms, 2);
+  DEBUG_PRINT("; dZeit[ms]=");
+  DEBUG_PRINT(timeDiff_ms, 2);
   
-  Serial.print("; pres[Pa]=");
-  Serial.print(Druck);
+  DEBUG_PRINT("; pres[Pa]=");
+  DEBUG_PRINT(Druck);
   
-  Serial.print("; h[m]=");
-  Serial.print(Hoehe, 2);
+  DEBUG_PRINT("; h[m]=");
+  DEBUG_PRINT(Hoehe, 2);
   
-  Serial.print("; VarioR[m/s]=");
-  Serial.print(VarioR, 2);
+  DEBUG_PRINT("; VarioR[m/s]=");
+  DEBUG_PRINT(VarioR, 2);
   
-  Serial.print("; Vario[m/s]=");
-  Serial.println(Vario, 2);
+  DEBUG_PRINT("; Vario[m/s]=");
+  DEBUG_PRINTLN(Vario, 2);
 #endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
 }
 
@@ -406,13 +411,13 @@ static void AkkuVolt()
     }
   }
 #if DEBUG_BATTERY_VOLTAGE
-  Serial.print("Battery: analog=");
-  Serial.print(Vbat);
-  Serial.print(", batt=");
-  Serial.print(batt_voltage);
-  Serial.print("[V] = ");
-  Serial.print(Battery_perc);
-  Serial.println("[%]");
+  DEBUG_PRINT("Battery: analog=");
+  DEBUG_PRINT(Vbat);
+  DEBUG_PRINT(", batt=");
+  DEBUG_PRINT(batt_voltage);
+  DEBUG_PRINT("[V] = ");
+  DEBUG_PRINT(Battery_perc);
+  DEBUG_PRINTLN("[%]");
 #endif
 }
 
@@ -461,12 +466,9 @@ static void Bluetooth()
     //Druck = bpm.readPressure();
     Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
 
-    Serial.print("PRS ");               //Ausgabe an der BT fuer MiniPro.
-    Serial.println( Druck, HEX);        //BT-Serial Schnittstelle ungefiltert.  Fuer MiniPro.
-
-    //Serial1.print("PRS ");               //Ausgabe an der BT fuer Leonardo.
-    //Serial1.println( Druck, HEX);        //BT-Serial Schnittstelle ungefiltert.  Fuer Leonardo.
-
+    BLUETOOTH_PRINT("PRS ");               //Ausgabe an der BT fuer MiniPro.
+    BLUETOOTH_PRINTLN( Druck, HEX);        //BT-Serial Schnittstelle ungefiltert.  Fuer MiniPro.
+    
     delay(leseZeitBT - 73);
 
     // Wenn XCSoar verwendet wird die Zeile drunter mit "//..." auskommentieren.
@@ -565,18 +567,12 @@ static void Bluetooth()
   // Checksum berechnen
 
   // Fuer MiniPro:
-  Serial.print("$");
-  Serial.print(s);
-  Serial.print("*");
-  Serial.println(XOR, HEX);
+  BLUETOOTH_PRINT("$");
+  BLUETOOTH_PRINT(s);
+  BLUETOOTH_PRINT("*");
+  BLUETOOTH_PRINTLNA(XOR, HEX);
 
-  // Fuer Leonardo:
-  //Serial1.print("$");
-  //Serial1.print(s);
-  //Serial1.print("*");
-  //Serial1.println(XOR,HEX);
-
-  delay(leseZeitBT - 30);
+  //delay(leseZeitBT - 30);
   // Ende "LK8EX1" sentence ================================================================================= */
 
   // =>>
@@ -616,16 +612,10 @@ static void Bluetooth()
       }
 
       // Fuer MiniPro:
-      Serial.print("$");
-      Serial.print(s);
-      Serial.print("*");
-      Serial.println(XOR,HEX);
-
-      // Fuer Leonardo:
-      //Serial1.print("$");
-      //Serial1.print(s);
-      //Serial1.print("*");
-      //Serial1.println(XOR,HEX); //
+      BLUETOOTH_PRINT("$");
+      BLUETOOTH_PRINT(s);
+      BLUETOOTH_PRINT("*");
+      BLUETOOTH_PRINTLN(XOR,HEX);
 
     delay(leseZeitBT - 24);
 
@@ -659,7 +649,7 @@ static void Bluetooth()
     Serial.print(Vario, 2);
     Serial.print("; ");
 
-    Serial.print(PinBT);
+    Serial.print(BluetoothEnabled);
     Serial.println();
 
     delay(leseZeit_ms - 4);
