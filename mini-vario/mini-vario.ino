@@ -33,10 +33,7 @@
 // speaker and led init sequence to show that device is up
 #define INTRO_SEQUENCE 1
 
-#define DEBUG_NO_TONE 1
-#if DEBUG_NO_TONE
-#define tone(x, y, z)
-#endif
+#define DEBUG_NO_TONE 0
 
 #define DEBUG_BARO_READ 0
 #define DEBUG_RISE_CALCULATION 0
@@ -77,6 +74,10 @@ const short PowerLevelStages = 5;
 
 // ###################################################
 // ######         END OF ADAPTION AREA          ######
+
+#if DEBUG_NO_TONE
+#define tone(x, y, z)
+#endif
 
 #if BARO == _BARO_MS5611
 # include <MS5611.h>
@@ -198,7 +199,7 @@ void setup() {
   delay(200);
 
   AkkuVolt(); // read battery level once at startup
-  int batteryStage = (Battery_perc / 100.0) * PowerLevelStages;
+  int batteryStage = (Battery_perc / 100.0) * (PowerLevelStages + 1);
   Serial.print("BatteryLevelStage = ");
   Serial.print(batteryStage);
   Serial.print(" / ");
@@ -375,7 +376,7 @@ static void AkkuVolt()
     float voltage;
   } capacity2voltage[] = {
 #if USED_BATTERY == BATTERY_1S // this is only for 3.7V lipos (1S)
-    { 100, 4.20 },
+    { 100, 4.20 }, // I measured with active and non-active system 4.08V at 100% with my battery...
     {  90, 4.11 },
     {  80, 4.02 },
     {  70, 3.95 },
