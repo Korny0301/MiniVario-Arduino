@@ -45,11 +45,10 @@
 
 // variables to adapt
 // define your used pins here, use number definition, e.g. D2 = 2
-const short bt_pin = 2; // Bluetooth Pin definieren. Fuer Leonardo 14. Fuer die Anderen 2
-const short a_pin1 = 3; // Lautsprecher Pin definieren
-const short BatV = A3; // Akku Spannung Pin definieren
-
 const short PinPowerLed = 2; // Power LED
+const short PinSpeaker = 3; // Lautsprecher Pin definieren
+const short PinBluetoothEnabled = 4; // Bluetooth is enabled pin
+const short PinBattery_analog = A3; // Akku Spannung Pin definieren
 
 const float V_ref = 5.17; // measured voltage, should be 5V
 
@@ -122,8 +121,8 @@ void setup() {
   Serial.begin(9600);
   Serial.println("Starting mini vario project...");
   /*
-    pinMode(bt_pin, INPUT);                 // Definiert den Pin für der BT Schalter.
-    PinBT = digitalRead(bt_pin);            // Definiere SChalter Zustand fuer BT.
+    pinMode(PinBluetoothEnabled, INPUT);                 // Definiert den Pin für der BT Schalter.
+    PinBT = digitalRead(PinBluetoothEnabled);            // Definiere SChalter Zustand fuer BT.
     //PinBT = 0;                            // Wenn keine BT-Modul eingebaut ist. Die obere Zwei auskommentieren.
 
     pinMode(7, OUTPUT);                     // Pin zum BT Versorgung.
@@ -185,17 +184,17 @@ void setup() {
 
 #if INTRO_SEQUENCE
   // Spielt die Start-Tonfolge.
-  tone(a_pin1, 100, 150);
+  tone(PinSpeaker, 100, 150);
   delay(200);
-  tone(a_pin1, 200, 150);
+  tone(PinSpeaker, 200, 150);
   delay(200);
-  tone(a_pin1, 400, 150);
+  tone(PinSpeaker, 400, 150);
   delay(200);
-  tone(a_pin1, 700, 150);
+  tone(PinSpeaker, 700, 150);
   delay(200);
-  tone(a_pin1, 1100, 150);
+  tone(PinSpeaker, 1100, 150);
   delay(200);
-  tone(a_pin1, 1600, 150);
+  tone(PinSpeaker, 1600, 150);
   delay(200);
 
   AkkuVolt(); // read battery level once at startup
@@ -249,7 +248,7 @@ void loop()
       PiepserX();
     }
     else {
-      noTone(a_pin1);
+      noTone(PinSpeaker);
     }
   //}
   //else {
@@ -392,7 +391,7 @@ static void AkkuVolt()
 #endif
   };
   
-  Vbat = analogRead(BatV);
+  Vbat = analogRead(PinBattery_analog);
   const float batt_voltage = Vbat * (V_ref / 1023.00);
   
   Battery_perc = 0;
@@ -434,17 +433,17 @@ static void PiepserX()
   if (Vario >= min_steigen) {
     if ((millis() - timeBeep) >= (unsigned long)(2 * duration)) {
       timeBeep = millis();
-      tone(a_pin1 , int(frequency), int(duration) );
+      tone(PinSpeaker , int(frequency), int(duration) );
     }
   }
 
   // Wenn Sinken kleiner als max_sinken
   if (Vario <= max_sinken) {
-    tone(a_pin1 , 300, 150);
+    tone(PinSpeaker, 300, 150);
     delay(125);
-    tone(a_pin1 , 200, 150);
+    tone(PinSpeaker, 200, 150);
     delay(150);
-    tone(a_pin1 , 100, 150);
+    tone(PinSpeaker, 100, 150);
     delay(175);
   }
 }
