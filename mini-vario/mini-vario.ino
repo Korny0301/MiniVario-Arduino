@@ -22,22 +22,34 @@
 // add further batteries here and in battery level calculation routine
 #define BATTERY_1S 1
 
+// used for BLUETOOTH_SERIAL
+// hardware solution (default RX+TX pins), result in troubles using the serial port 
+// for flashing and monitoring!
+#define BLUETOOTH_SERIAL_HW 1
+// software solution for serial communication, any digital pins
+#define BLUETOOTH_SERIAL_SW 2
+
 // ###################################################
 // ###### ADAPTION AREA: adapt your config here ######
 
 // set here the used barometer, install required library via Arduino IDE
 #define BARO _BARO_BMP280
 
+// set your used battery for lookup table of capacity
 #define USED_BATTERY BATTERY_1S
+
+// define the used serial interface
+#define BLUETOOTH_SERIAL BLUETOOTH_SERIAL_SW
 
 // speaker and led init sequence to show that device is up
 #define INTRO_SEQUENCE 1
 
-#define DEBUG_NO_TONE 0
+#define DEBUG_NO_TONE 1
 
 #define DEBUG_BARO_READ 0
 #define DEBUG_RISE_CALCULATION 0
 #define DEBUG_BATTERY_VOLTAGE 1
+#define DEBUG_BT_READ 1
 
 #define ARRAYSIZE(x) sizeof(x)/sizeof(x[0])
 
@@ -57,12 +69,18 @@ const short PinBluetoothEnabled = 4;
 // pin to measure analog voltage of attached battery
 const short PinBattery_analog = A3;
 
+#if BLUETOOTH_SERIAL == BLUETOOTH_SERIAL_SW
+// pins can be defined for software solution only
+const short BluetoothSerialSwPinRx = 6;
+const short BluetoothSerialSwPinTx = 5;
+#endif
+
 const float V_ref = 5.17; // measured voltage, should be 5V
 
 // I2C address for BMP280 barometer
 const short BMP280_BaroI2cAddress = 0x76;
 
-const char* BluetoothName = "Korio";
+const char* BluetoothName = "Kovario";
 
 const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
 const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
@@ -87,12 +105,18 @@ const short PowerLevelStages = 5;
 #define tone(x, y, z)
 #endif
 
-#define DEBUG_PRINT(x)           do { if (!BluetoothEnabled) { Serial.print(x); }} while(0)
-#define DEBUG_PRINTLN(x)         do { if (!BluetoothEnabled) { Serial.println(x); }} while(0)
-#define BLUETOOTH_PRINT(x)       do { if (BluetoothEnabled) { Serial.print(x); }} while(0)
-#define BLUETOOTH_PRINTA(x, a)   do { if (BluetoothEnabled) { Serial.print(x, a); }} while(0)
-#define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { Serial.println(x); }} while(0)
-#define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { Serial.println(x, a); }} while(0)
+#if BLUETOOTH_SERIAL == BLUETOOTH_SERIAL_HW
+#  define DEBUG_PRINT(x)           do { if (!BluetoothEnabled) { Serial.print(x); }} while(0)
+#  define DEBUG_PRINTLN(x)         do { if (!BluetoothEnabled) { Serial.println(x); }} while(0)
+#else
+#  define DEBUG_PRINT(x)           do { Serial.print(x); } while(0)
+#  define DEBUG_PRINTLN(x)         do { Serial.println(x); } while(0)
+#endif
+
+#define BLUETOOTH_PRINT(x)       do { if (BluetoothEnabled) { SerialBT.print(x); }} while(0)
+#define BLUETOOTH_PRINTA(x, a)   do { if (BluetoothEnabled) { SerialBT.print(x, a); }} while(0)
+#define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { SerialBT.println(x); }} while(0)
+#define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { SerialBT.println(x, a); }} while(0)
 
 #if BARO == _BARO_MS5611
 # include <MS5611.h>
@@ -103,6 +127,13 @@ MS5611 bpm;
 Adafruit_BMP280 bmp; // I2C
 #else
 # error Defined barometer not known
+#endif
+
+#if BLUETOOTH_SERIAL == BLUETOOTH_SERIAL_HW
+HardwareSerial SerialBT = Serial;
+#elif BLUETOOTH_SERIAL == BLUETOOTH_SERIAL_SW
+#  include <SoftwareSerial.h>
+SoftwareSerial SerialBT(BluetoothSerialSwPinRx, BluetoothSerialSwPinTx);
 #endif
 
 //! error number is indicated by state LED
@@ -136,8 +167,12 @@ void setup() {
   pinMode(PinBluetoothEnabled, INPUT);                 
   BluetoothEnabled = digitalRead(PinBluetoothEnabled);
 
-  // for debug print to PC or for bluetooth
+  // for debug print to PC
   Serial.begin(9600);
+
+  if (BluetoothEnabled) {
+    SerialBT.begin(38400);
+  }
   
   leseZeit_ms = leseZeit_ms - 34;
   
@@ -199,13 +234,22 @@ void setup() {
 
   // rename bluetooth device
   if (BluetoothEnabled) {
-      BLUETOOTH_PRINT("AT");
-      delay(1500);
-      BLUETOOTH_PRINT("AT+NAME");
-      BLUETOOTH_PRINT(BluetoothName); // set new bluetooth name
+      BLUETOOTH_PRINT("AT+NAME=");
+      BLUETOOTH_PRINTLN(BluetoothName); // set new bluetooth name
       delay(500);
-      //BLUETOOTH_PRINT("AT+RESET");
-      delay(500);//
+
+#if DEBUG_BT_READ
+      BLUETOOTH_PRINTLN("AT+NAME");
+      delay(500);
+      DEBUG_PRINT("BT read name: ");
+      while (SerialBT.available()) {
+        char c = SerialBT.read();
+        DEBUG_PRINT(c);
+      }
+#endif
+
+      BLUETOOTH_PRINTLN("AT+RESET");
+      delay(500);
   }
 
   DEBUG_PRINTLN("Initialization done.");
