@@ -29,6 +29,16 @@
 // software solution for serial communication, any digital pins
 #define BLUETOOTH_SERIAL_SW 2
 
+// TODO WIP
+#define RISE_EVALUATION_IVKOPIVKO 1
+#define RISE_EVALUATION_PAVLESKI  2
+
+#define BT_PROTOCOL_BLUEFLY 1
+#define BT_PROTOCOL_LK8EX1 2
+#define BT_PROTOCOL_LXNAV 3
+#define BT_PROTOCOL_CUSTOM_BFV 4
+#define BT_PROTOCOL_TEST_VIA_SERIAL 5
+
 // ###################################################
 // ###### ADAPTION AREA: adapt your config here ######
 
@@ -41,14 +51,20 @@
 // define the used serial interface
 #define BLUETOOTH_SERIAL BLUETOOTH_SERIAL_SW
 
-// speaker and led init sequence to show that device is up
-#define INTRO_SEQUENCE 1
+// protocol to use for communication via bluetooth, depends on used app/vario
+#define BT_PROTOCOL BT_PROTOCOL_BLUEFLY
 
-#define DEBUG_NO_TONE 1
+// TODO WIP
+#define RISE_EVALUATION RISE_EVALUATION_IVKOPIVKO
+
+// speaker and led init sequence to show that device is up
+#define INTRO_SEQUENCE 0
+
+#define DEBUG_NO_TONE 0
 
 #define DEBUG_BARO_READ 0
-#define DEBUG_RISE_CALCULATION 0
-#define DEBUG_BATTERY_VOLTAGE 1
+#define DEBUG_RISE_CALCULATION 1
+#define DEBUG_BATTERY_VOLTAGE 0
 #define DEBUG_BT_READ 1
 
 #define ARRAYSIZE(x) sizeof(x)/sizeof(x[0])
@@ -82,19 +98,24 @@ const short BMP280_BaroI2cAddress = 0x76;
 
 const char* BluetoothName = "Kovario";
 
+# if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
+#define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
 const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
 const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
+// Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
+const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
+#elif RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
+#  define NUM_PRESSURES 64
+#  define NUM_TOTALS 16
+#endif
 
-long leseZeit_ms = 125; // Interval zum lesen vom Baro audio Vario, Standard(min) ist 150
-const long leseZeitBT = 100; // Interval zum lesen vom Baro fuer BT, Standard(min) ist 100
+long leseZeit_ms = 100; // interval to read data from barometer
+const long leseZeitBT_ms = 200; // cyclic interval to send current data via bluetooth
 const long CycleTimeBattery_ms = 10000;
 
 // after this amount of milliseconds the status led is going to blink for the given duration
 const long CycleTimeBlinkAlive_ms = 3000;
 const long BlinkAliveDuration_ms = 100;
-
-// Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
-const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
 
 const short PowerLevelStages = 5;
 
@@ -107,10 +128,14 @@ const short PowerLevelStages = 5;
 
 #if BLUETOOTH_SERIAL == BLUETOOTH_SERIAL_HW
 #  define DEBUG_PRINT(x)           do { if (!BluetoothEnabled) { Serial.print(x); }} while(0)
+#  define DEBUG_PRINTA(x, a)       do { if (!BluetoothEnabled) { Serial.print(x, a); }} while(0)
 #  define DEBUG_PRINTLN(x)         do { if (!BluetoothEnabled) { Serial.println(x); }} while(0)
+#  define DEBUG_PRINTLNA(x, a)     do { if (!BluetoothEnabled) { Serial.println(x, a); }} while(0)
 #else
 #  define DEBUG_PRINT(x)           do { Serial.print(x); } while(0)
+#  define DEBUG_PRINTA(x, a)       do { Serial.print(x, a); } while(0)
 #  define DEBUG_PRINTLN(x)         do { Serial.println(x); } while(0)
+#  define DEBUG_PRINTLNA(x, a)     do { Serial.println(x, a); } while(0)
 #endif
 
 #define BLUETOOTH_PRINT(x)       do { if (BluetoothEnabled) { SerialBT.print(x); }} while(0)
@@ -151,9 +176,17 @@ float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
 
 unsigned long dZeit;
 
-#define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
 float kal[AMOUNT_AVG_VALS];
-
+#elif RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
+uint32_t pressure[NUM_PRESSURES];
+uint32_t old_total[NUM_TOTALS];
+int pressure_index = 0;
+int total_index = 0;
+uint32_t total;
+int current_tone = 0;
+int beep_time = 0;
+#endif
 
 // initialization at startup
 void setup() {
@@ -252,7 +285,81 @@ void setup() {
       delay(500);
   }
 
+#if RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
+  BaroAuslesen();
+  uint32_t p = Druck;
+  total = p*NUM_PRESSURES;
+  for(int i = 0; i<NUM_PRESSURES; i++)
+  {
+    pressure[i] = p;
+  }
+  for(int i = 0; i<NUM_TOTALS; i++)
+  {
+    old_total[i] = total;
+  }
+#endif
+
   DEBUG_PRINTLN("Initialization done.");
+}
+
+static void handleRiseTone()
+{
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
+  if (Vario >= min_steigen || Vario <= max_sinken) {
+    PiepserX();
+  }
+  else {
+    noTone(PinSpeaker);
+  }
+#elif RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
+  total -= pressure[pressure_index];
+  pressure[pressure_index] = Druck;
+  total += pressure[pressure_index];
+  int32_t rate = total - old_total[total_index];
+  float frate = (float)rate;
+  frate = 0.0;
+  old_total[total_index] = total;
+  pressure_index++;
+  total_index++;
+  if(pressure_index >= NUM_PRESSURES)pressure_index = 0;
+  if(total_index >= NUM_TOTALS)total_index = 0;
+  if(rate < -200){
+    if(beep_time <5)
+      tone(PinSpeaker, 500 - rate, 1000);
+    else
+      noTone(PinSpeaker);
+  }
+  else if(rate > 200)
+  {
+    float f = 100.0 + 40000.0 * 1.0/((float)rate);
+    tone(PinSpeaker, f, 1000);
+  }
+  else
+  {
+    noTone(PinSpeaker);
+  }
+  beep_time++;
+  if(beep_time >= 10)beep_time = 0;
+  
+#  if DEBUG_RISE_CALCULATION
+  DEBUG_PRINT("pressure_index=");
+  DEBUG_PRINT(pressure_index);
+  
+  DEBUG_PRINT("; pres[Pa]=");
+  DEBUG_PRINT(Druck);
+  
+  DEBUG_PRINT("; h[m]=");
+  DEBUG_PRINTA(Hoehe, 2);
+  
+  DEBUG_PRINT("; rate=");
+  DEBUG_PRINT(rate);
+  
+  DEBUG_PRINT("; total=");
+  DEBUG_PRINTLN(total);
+#  endif
+#else
+#  error This rise evaluation is not known!
+#endif
 }
 
 // cyclic loop
@@ -287,18 +394,16 @@ void loop()
     
   if ((diff_ms = timeNow_ms - lastTimeDiff_ms) >= leseZeit_ms) {
     BaroAuslesen();
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
     SteigenBerechnen(diff_ms);
+#endif
     lastTimeDiff_ms = timeNow_ms;
   }
-  if (Vario >= min_steigen || Vario <= max_sinken) {
-    PiepserX();
-  }
-  else {
-    noTone(PinSpeaker);
-  }
+  
+  handleRiseTone();
   
   if (BluetoothEnabled) {
-    if ((timeNow_ms - lastTimeBluetooth_ms) >= leseZeitBT) {
+    if ((timeNow_ms - lastTimeBluetooth_ms) >= leseZeitBT_ms) {
       Bluetooth();
       lastTimeBluetooth_ms = timeNow_ms;
     }
@@ -360,6 +465,7 @@ static void BaroAuslesen()
 #endif
 }
 
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
 static void SteigenBerechnen(float timeDiff_ms)
 {
   static int startCh = 0;
@@ -400,21 +506,22 @@ static void SteigenBerechnen(float timeDiff_ms)
   DEBUG_PRINT(BluetoothEnabled);
   
   DEBUG_PRINT("; dZeit[ms]=");
-  DEBUG_PRINT(timeDiff_ms, 2);
+  DEBUG_PRINTA(timeDiff_ms, 2);
   
   DEBUG_PRINT("; pres[Pa]=");
   DEBUG_PRINT(Druck);
   
   DEBUG_PRINT("; h[m]=");
-  DEBUG_PRINT(Hoehe, 2);
+  DEBUG_PRINTA(Hoehe, 2);
   
   DEBUG_PRINT("; VarioR[m/s]=");
-  DEBUG_PRINT(VarioR, 2);
+  DEBUG_PRINTA(VarioR, 2);
   
   DEBUG_PRINT("; Vario[m/s]=");
-  DEBUG_PRINTLN(Vario, 2);
+  DEBUG_PRINTLNA(Vario, 2);
 #endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
 }
+#endif
 
 static void AkkuVolt()
 {
@@ -465,6 +572,7 @@ static void AkkuVolt()
 #endif
 }
 
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
 static void PiepserX()
 {
   static unsigned long timeBeep;
@@ -496,72 +604,60 @@ static void PiepserX()
     delay(175);
   }
 }
+#endif
 
 // ###### Bluetooth functionality ######
 // different communitation protocols possible
 static void Bluetooth()
 {
-  // Start "Blue Fly Vario" sentence =============================================================================
-  /* Ausgabe im BlueFlyVario Format.     The standard BlueFlyVario outp ut mode. This sends raw
+#if BT_PROTOCOL == BT_PROTOCOL_BLUEFLY
+
+    /* Ausgabe im BlueFlyVario Format.     The standard BlueFlyVario outp ut mode. This sends raw
     pressure measurements in the form "PRS XXXXX\n": XXXXX is the raw (unfiltered) pressure
     measurement in hexadecimal pascals. */
-  /*/ On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
-    Temp = bpm.readTemperature();
-    //Druck = bpm.readPressure();
-    Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
 
-    BLUETOOTH_PRINT("PRS ");               //Ausgabe an der BT fuer MiniPro.
-    BLUETOOTH_PRINTLN( Druck, HEX);        //BT-Serial Schnittstelle ungefiltert.  Fuer MiniPro.
-    
-    delay(leseZeitBT - 73);
+    BLUETOOTH_PRINT("PRS "); // Ausgabe an der BT fuer MiniPro.
+    BLUETOOTH_PRINTLNA(Druck, HEX); // BT-Serial Schnittstelle ungefiltert. Fuer MiniPro.
 
     // Wenn XCSoar verwendet wird die Zeile drunter mit "//..." auskommentieren.
-    //delay(leseZeitBT - 22); //Wenn XCTrack benutzt wird Zeile aktiv lassen.
+    //delay(leseZeitBT_ms - 22); // Wenn XCTrack benutzt wird Zeile aktiv lassen.
 
-    // Ende "BlueFlyVario" sentence =========================================================================== */
+#elif BT_PROTOCOL == BT_PROTOCOL_LXNAV
 
-  // Start "LXNAV - LXWP0" sentence ==============================================================================
-  // =============================================================================================================
   /* Send LXWP0 output mode for use with a range of apps:
       "$LXWP0,loger_stored (Y/N), IAS (kph), baroaltitude (m), vario (m/s),,,,,,heading of plane,
       windcourse (deg),windspeed (kph)*checksum \r\n" */
-  /*/ On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
-      SteigenBerechnen();
-
-      String s = "LXWP0,N,,";
-      s = String(s+ String(Hoehe,1) + "," + String(Vario,2) + ",,,,,,,,"  );
+      
+    String s = "LXWP0,N,,";
+    s = String(s+ String(Hoehe,1) + "," + String(Vario,2) + ",,,,,,,,"  );
 
     // Checksum berechnen und als int ausgeben
     // wird als HEX benötigt im NMEA Datensatz
     // zwischen $ und * rechnen
-      int i, XOR, c;
-      XOR = 0;
+    int i, XOR, c;
+    XOR = 0;
 
-      for (i = 0; i < s.length(); i++) {
-          c = (unsigned char)s.charAt(i);
-          if (c == '*') break;
-          if (c!='$') XOR ^= c;
-      }
-    // Checksum berechnen
+    // checksum berechnen
+    for (i = 0; i < s.length(); i++) {
+        c = (unsigned char)s.charAt(i);
+        if (c == '*') break;
+        if (c!='$') XOR ^= c;
+    }
 
-      // Fuer MiniPro:
-      Serial.print("$");
-      Serial.print(s);
-      Serial.print("*");
-      Serial.println(XOR,HEX);
+    // Fuer MiniPro:
+    BLUETOOTH_PRINT("$");
+    BLUETOOTH_PRINT(s);
+    BLUETOOTH_PRINT("*");
+    BLUETOOTH_PRINTLNA(XOR,HEX);
 
-      // Fuer Leonardo:
-      //Serial1.print("$");
-      //Serial1.print(s);
-      //Serial1.print("*");
-      //Serial1.println(XOR,HEX); //
+    // Fuer Leonardo:
+    //Serial1.print("$");
+    //Serial1.print(s);
+    //Serial1.print("*");
+    //Serial1.println(XOR,HEX);
+    
+#elif BT_PROTOCOL == BT_PROTOCOL_LK8EX1
 
-    delay(leseZeitBT - 73);
-
-    // Ende "LXNAV - LXWP0" sentence ========================================================================== */
-
-  // Start "LK8EX1" sentence =====================================================================================
-  // =============================================================================================================
   // Send $LK8EX1,pressure,altitude,vario,temperature,battery,*checksum
   /*
     LK8EX1,pressure,altitude,vario,temperature,battery,*checksum
@@ -589,10 +685,6 @@ static void Bluetooth()
       14% = 1014 .  Do not send float values for percentages.
     Percentage should be 0 to 100, with no decimals, added by 1000!
   */
-  // On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
-  //    Temp = bpm.readTemperature(true);
-  //    Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
-  //SteigenBerechnen();
 
   String s = "LK8EX1,";
   s = String(s + String(Druck, DEC) + ",99999,9999," + String(Temp, 1) + "," + String(Battery_perc, 0) + ",");
@@ -615,11 +707,8 @@ static void Bluetooth()
   BLUETOOTH_PRINT(s);
   BLUETOOTH_PRINT("*");
   BLUETOOTH_PRINTLNA(XOR, HEX);
-
-  //delay(leseZeitBT - 30);
-  // Ende "LK8EX1" sentence ================================================================================= */
-
-  // =>>
+  
+#elif BT_PROTOCOL == BT_PROTOCOL_CUSTOM_BFV
 
   // Start "Custom BFV" sentence =================================================================================
   /* Custom BFV sentence: This sends a NMEA like sentence in the following format:
@@ -630,73 +719,62 @@ static void Bluetooth()
     and temp(signed float) are always sent. Battery % (unsigned integer) is only sent for models which include
     a battery; otherwise "0" is sent. pitotDiffPressure (signed integer) is only sent when the hardware setting
     usePitot is enabled. */
-  /*/ On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
 
-      //SteigenBerechnen();
-      Temp = bpm.readTemperature(true);
-      Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
+    Temp = bpm.readTemperature(true);
+    Druck = 0.250* bpm.readPressure(true) +  0.750* Druck;
 
-      AkkuVolt();
+    AkkuVolt();
 
-      String s = "BFV,";
-      //s = String(s + String(Druck,DEC) + "," + String(Vario*100,DEC) + "," + String(Temp,2) + ",");
-      s = String(s + String(Druck,DEC) + ",," + String(Temp,2) + ",");
-      s = String(s + String(Battery_perc,DEC) + "," );
+    String s = "BFV,";
+    //s = String(s + String(Druck,DEC) + "," + String(Vario*100,DEC) + "," + String(Temp,2) + ",");
+    s = String(s + String(Druck,DEC) + ",," + String(Temp,2) + ",");
+    s = String(s + String(Battery_perc,DEC) + "," );
 
     // Checksum berechnen
     // und als int ausgeben wird als HEX benötigt.
     // Im NMEA Datensatz zwischen $ und * rechnen.
-      int i, XOR, c;
-      XOR = 0;
+    int i, XOR, c;
+    XOR = 0;
 
-      for (i = 0; i < s.length(); i++) {
-          c = (unsigned char)s.charAt(i);
-          if (c == '*') break;
-          if (c!='$') XOR ^= c;
-      }
+    for (i = 0; i < s.length(); i++) {
+        c = (unsigned char)s.charAt(i);
+        if (c == '*') break;
+        if (c!='$') XOR ^= c;
+    }
 
-      // Fuer MiniPro:
-      BLUETOOTH_PRINT("$");
-      BLUETOOTH_PRINT(s);
-      BLUETOOTH_PRINT("*");
-      BLUETOOTH_PRINTLN(XOR,HEX);
+    // Fuer MiniPro:
+    BLUETOOTH_PRINT("$");
+    BLUETOOTH_PRINT(s);
+    BLUETOOTH_PRINT("*");
+    BLUETOOTH_PRINTLN(XOR,HEX);
 
-    delay(leseZeitBT - 24);
+#elif BT_PROTOCOL == BT_PROTOCOL_TEST_VIA_SERIAL
 
-    // Ende "Custom BFV sentence" ============================================================================= */
+  // Zum Testen ueber Serial-Port !!!-> nicht vergessen VarioR aus zu kommentieren.
+  // Temp.[C°];Druck[Pa];Hoehe[m];dZeit[ms];VarioR[m/s];Vario[m/s];BT Taster
 
+  DEBUG_PRINTA(Temp, 2);
+  DEBUG_PRINT("; ");
 
-  // Start Normale Daten Ausgabe =================================================================================
-  /*/ On-Off | Hier zwischen // ein * setzen dann ist es deaktiviert.
+  DEBUG_PRINT(Druck);
+  DEBUG_PRINT("; ");
 
-    // Zum Testen ueber Serial-Port !!!-> nicht vergessen VarioR aus zu kommentieren.
-    // Temp.[C°];Druck[Pa];Hoehe[m];dZeit[ms];VarioR[m/s];Vario[m/s];BT Taster
-    // Zum Ausgabe aktivieren * zwischen // löschen.
+  DEBUG_PRINTA(Hoehe, 2);
+  DEBUG_PRINT("; ");
 
-    SteigenBerechnen();
+  DEBUG_PRINTA(dZeit/1000, 3);
+  DEBUG_PRINT("; ");
 
-    Serial.print(Temp, 2);
-    Serial.print("; ");
+  DEBUG_PRINTA(VarioR, 2);
+  DEBUG_PRINT("; ");
 
-    Serial.print(Druck);
-    Serial.print("; ");
+  DEBUG_PRINTA(Vario, 2);
+  DEBUG_PRINT("; ");
 
-    Serial.print(Hoehe, 2);
-    Serial.print("; ");
+  DEBUG_PRINT(BluetoothEnabled);
+  DEBUG_PRINTLN(" ");
 
-    Serial.print(dZeit/1000, 3);
-    Serial.print("; ");
-
-    Serial.print(VarioR, 2);
-    Serial.print("; ");
-
-    Serial.print(Vario, 2);
-    Serial.print("; ");
-
-    Serial.print(BluetoothEnabled);
-    Serial.println();
-
-    delay(leseZeit_ms - 4);
-
-    // Ende Normale Daten Ausgabe ============================================================================= */
+#else
+#  error Bluetooth protocol not known
+#endif
 }
