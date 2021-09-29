@@ -63,9 +63,10 @@
 #define DEBUG_NO_TONE 0
 
 #define DEBUG_BARO_READ 0
-#define DEBUG_RISE_CALCULATION 1
+#define DEBUG_RISE_CALCULATION 0
 #define DEBUG_BATTERY_VOLTAGE 0
-#define DEBUG_BT_READ 1
+#define DEBUG_BT_READ 0
+#define DEBUG_BT_CYCLIC_WRITE 0
 
 #define ARRAYSIZE(x) sizeof(x)/sizeof(x[0])
 
@@ -97,6 +98,8 @@ const float V_ref = 5.17; // measured voltage, should be 5V
 const short BMP280_BaroI2cAddress = 0x76;
 
 const char* BluetoothName = "Kovario";
+
+#define BT_USE_LN_FOR_CMD_EXECUTION 0 // 0 or 1
 
 # if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
 #define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
@@ -140,8 +143,14 @@ const short PowerLevelStages = 5;
 
 #define BLUETOOTH_PRINT(x)       do { if (BluetoothEnabled) { SerialBT.print(x); }} while(0)
 #define BLUETOOTH_PRINTA(x, a)   do { if (BluetoothEnabled) { SerialBT.print(x, a); }} while(0)
-#define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { SerialBT.println(x); }} while(0)
-#define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { SerialBT.println(x, a); }} while(0)
+
+#if BT_USE_LN_FOR_CMD_EXECUTION
+#  define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { SerialBT.println(x); }} while(0)
+#  define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { SerialBT.println(x, a); }} while(0)
+#else
+#  define BLUETOOTH_PRINTLN(x)     do { if (BluetoothEnabled) { SerialBT.print(x); }} while(0)
+#  define BLUETOOTH_PRINTLNA(x, a) do { if (BluetoothEnabled) { SerialBT.print(x, a); }} while(0)
+#endif
 
 #if BARO == _BARO_MS5611
 # include <MS5611.h>
@@ -204,10 +213,8 @@ void setup() {
   Serial.begin(9600);
 
   if (BluetoothEnabled) {
-    SerialBT.begin(38400);
+    SerialBT.begin(9600); // TODO
   }
-  
-  leseZeit_ms = leseZeit_ms - 34;
   
   DEBUG_PRINTLN("Starting mini vario project...");
   DEBUG_PRINT("Bluetooth: ");
@@ -267,12 +274,12 @@ void setup() {
 
   // rename bluetooth device
   if (BluetoothEnabled) {
-      BLUETOOTH_PRINT("AT+NAME=");
+      BLUETOOTH_PRINT("AT+NAME");
       BLUETOOTH_PRINTLN(BluetoothName); // set new bluetooth name
       delay(500);
 
 #if DEBUG_BT_READ
-      BLUETOOTH_PRINTLN("AT+NAME");
+      BLUETOOTH_PRINTLN("AT+NAME?");
       delay(500);
       DEBUG_PRINT("BT read name: ");
       while (SerialBT.available()) {
@@ -618,6 +625,11 @@ static void Bluetooth()
 
     BLUETOOTH_PRINT("PRS "); // Ausgabe an der BT fuer MiniPro.
     BLUETOOTH_PRINTLNA(Druck, HEX); // BT-Serial Schnittstelle ungefiltert. Fuer MiniPro.
+
+# if DEBUG_BT_CYCLIC_WRITE
+    DEBUG_PRINT("PRS ");
+    DEBUG_PRINTLNA(Druck, HEX);
+# endif
 
     // Wenn XCSoar verwendet wird die Zeile drunter mit "//..." auskommentieren.
     //delay(leseZeitBT_ms - 22); // Wenn XCTrack benutzt wird Zeile aktiv lassen.
