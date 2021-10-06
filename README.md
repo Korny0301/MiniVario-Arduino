@@ -15,6 +15,8 @@ Barometric Pressure & Temperature Sensor Arduino Library (install only the requi
 - https://github.com/jarzebski/Arduino-MS5611
 - https://github.com/adafruit/Adafruit_BMP280_Library
 
+Optional low power mode:
+- https://github.com/rocketscream/Low-Power  
 
 ![Wiring](https://raw.githubusercontent.com/IvkoPivko/MiniVario-Arduino/master/Wiring/MiniPro_3-3V_Vario_Wiring_BT_Bat.png)
 

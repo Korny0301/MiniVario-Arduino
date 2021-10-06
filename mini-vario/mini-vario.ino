@@ -33,10 +33,10 @@
 #define RISE_EVALUATION_IVKOPIVKO 1
 #define RISE_EVALUATION_PAVLESKI  2
 
-#define BT_PROTOCOL_BLUEFLY 1
-#define BT_PROTOCOL_LK8EX1 2
-#define BT_PROTOCOL_LXNAV 3
-#define BT_PROTOCOL_CUSTOM_BFV 4
+#define BT_PROTOCOL_BLUEFLY 1 // TODO not sure if this works
+#define BT_PROTOCOL_LK8EX1 2 // worked for me with Flyskyhy app on iOS 15
+#define BT_PROTOCOL_LXNAV 3 // not tested
+#define BT_PROTOCOL_CUSTOM_BFV 4 // not tested
 #define BT_PROTOCOL_TEST_VIA_SERIAL 5
 
 // ###################################################
@@ -52,13 +52,27 @@
 #define BLUETOOTH_SERIAL BLUETOOTH_SERIAL_SW
 
 // protocol to use for communication via bluetooth, depends on used app/vario
-#define BT_PROTOCOL BT_PROTOCOL_BLUEFLY
+#define BT_PROTOCOL BT_PROTOCOL_LK8EX1
 
 // TODO WIP
 #define RISE_EVALUATION RISE_EVALUATION_IVKOPIVKO
 
 // speaker and led init sequence to show that device is up
-#define INTRO_SEQUENCE 0
+#define INTRO_SEQUENCE_TONE 0
+
+// battery blink sequence at startup that indicates the available capacity
+#define INTRO_SEQUENCE_BATT 1
+
+// use low power mode in every cyclic iteration for optimized power consumption
+#define ENTER_CYCLIC_LOW_POWER_STATE 1
+
+#if ENTER_CYCLIC_LOW_POWER_STATE
+// possible values: SLEEP_30MS, SLEEP_60MS, SLEEP_120MS, SLEEP_250MS, SLEEP_500MS, SLEEP_1S, ...
+# define CYCLIC_LOW_POWER_DURATION SLEEP_120MS
+// use low power cycle instead of fixed timings for cyclic operations
+# define CYCLIC_TIMING_OF_LOW_POWER_WAKEUP 1
+# include "LowPower.h"
+#endif
 
 #define DEBUG_NO_TONE 0
 
@@ -99,7 +113,7 @@ const short BMP280_BaroI2cAddress = 0x76;
 
 const char* BluetoothName = "Kovario";
 
-#define BT_USE_LN_FOR_CMD_EXECUTION 0 // 0 or 1
+#define BT_USE_LN_FOR_CMD_EXECUTION 0
 
 # if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
 #define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
@@ -112,13 +126,20 @@ const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berec
 #  define NUM_TOTALS 16
 #endif
 
-long leseZeit_ms = 100; // interval to read data from barometer
-const long leseZeitBT_ms = 200; // cyclic interval to send current data via bluetooth
-const long CycleTimeBattery_ms = 10000;
+#if ENTER_CYCLIC_LOW_POWER_STATE && CYCLIC_TIMING_OF_LOW_POWER_WAKEUP
+const long leseZeit_ms = 0;
+const long leseZeitBT_ms = 0;
+const long BlinkAliveDuration_ms = 0;
+#else
+const long leseZeit_ms = 100; // interval to read data from barometer
+const long leseZeitBT_ms = 100; // cyclic interval to send current data via bluetooth
+const long BlinkAliveDuration_ms = 100;
+#endif
 
 // after this amount of milliseconds the status led is going to blink for the given duration
 const long CycleTimeBlinkAlive_ms = 3000;
-const long BlinkAliveDuration_ms = 100;
+
+const long CycleTimeBattery_ms = 10000;
 
 const short PowerLevelStages = 5;
 
@@ -248,7 +269,7 @@ void setup() {
                   Adafruit_BMP280::STANDBY_MS_500); // Standby time
 #endif
 
-#if INTRO_SEQUENCE
+#if INTRO_SEQUENCE_TONE
   // Spielt die Start-Tonfolge.
   tone(PinSpeaker, 100, 150);
   delay(200);
@@ -262,13 +283,18 @@ void setup() {
   delay(200);
   tone(PinSpeaker, 1600, 150);
   delay(200);
+#endif
 
+#if INTRO_SEQUENCE_BATT
   AkkuVolt(); // read battery level once at startup
   int batteryStage = (Battery_perc / 100.0) * (PowerLevelStages + 1);
   DEBUG_PRINT("BatteryLevelStage = ");
   DEBUG_PRINT(batteryStage);
   DEBUG_PRINT(" / ");
-  DEBUG_PRINTLN(PowerLevelStages);
+  DEBUG_PRINT(PowerLevelStages);
+  DEBUG_PRINT(" (");
+  DEBUG_PRINTA(Battery_perc, 2);
+  DEBUG_PRINTLN(")");
   BlinkLedState(batteryStage);
 #endif
 
@@ -415,6 +441,11 @@ void loop()
       lastTimeBluetooth_ms = timeNow_ms;
     }
   }
+
+#if ENTER_CYCLIC_LOW_POWER_STATE
+  LowPower.idle(CYCLIC_LOW_POWER_DURATION, ADC_OFF, TIMER2_OFF, TIMER1_OFF, TIMER0_OFF, 
+                SPI_OFF, USART0_OFF, TWI_OFF);
+#endif
 
   start = false;
 }
@@ -662,11 +693,12 @@ static void Bluetooth()
     BLUETOOTH_PRINT("*");
     BLUETOOTH_PRINTLNA(XOR,HEX);
 
-    // Fuer Leonardo:
-    //Serial1.print("$");
-    //Serial1.print(s);
-    //Serial1.print("*");
-    //Serial1.println(XOR,HEX);
+# if DEBUG_BT_CYCLIC_WRITE
+    DEBUG_PRINT("$");
+    DEBUG_PRINT(s);
+    DEBUG_PRINT("*");
+    DEBUG_PRINTLNA(XOR,HEX);
+# endif
     
 #elif BT_PROTOCOL == BT_PROTOCOL_LK8EX1
 
@@ -699,26 +731,30 @@ static void Bluetooth()
   */
 
   String s = "LK8EX1,";
-  s = String(s + String(Druck, DEC) + ",99999,9999," + String(Temp, 1) + "," + String(Battery_perc, 0) + ",");
+  s = String(s + String(Druck, DEC) + ",99999," + String(Vario*100,2) + "," + String(Temp, 1) + "," + String(Battery_perc + 1000, 0) + ",");
 
   // Checksum berechnen und als int ausgeben
   // wird als HEX benötigt im NMEA Datensatz
   // zwischen $ und * rechnen
   int i, XOR, c;
   XOR = 0;
-
   for (i = 0; i < s.length(); i++) {
     c = (unsigned char)s.charAt(i);
     if (c == '*') break;
     if (c != '$') XOR ^= c;
   }
-  // Checksum berechnen
 
-  // Fuer MiniPro:
   BLUETOOTH_PRINT("$");
   BLUETOOTH_PRINT(s);
   BLUETOOTH_PRINT("*");
   BLUETOOTH_PRINTLNA(XOR, HEX);
+
+# if DEBUG_BT_CYCLIC_WRITE
+  DEBUG_PRINT("$");
+  DEBUG_PRINT(s);
+  DEBUG_PRINT("*");
+  DEBUG_PRINTLNA(XOR, HEX);
+# endif
   
 #elif BT_PROTOCOL == BT_PROTOCOL_CUSTOM_BFV
 
