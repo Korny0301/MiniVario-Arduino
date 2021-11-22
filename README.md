@@ -42,7 +42,7 @@ Notice, that the HC-05 (and 06) are not compatible with apple products as iPhone
 
 The program shows the measured lipo capacity at startup by default (can be disabled). The LED is used to indicate the available capacity by blinking with a maximum of five blink indicators. 
 
-The capacity can be estimated by using the characteristics of lipo batteries. The nominal voltages can be found ![here](https://blog.ampow.com/lipo-voltage-chart). The software already includes the lookup table for 1S lipo that indicates from the measured voltage to the estimated capacity. When you use other lipos, you must integrate them into the source code, at least the code is prepared for other lookup tables. The used table looks like:
+The capacity can be estimated by using the characteristics of lipo batteries. The nominal voltages can be found [here](https://blog.ampow.com/lipo-voltage-chart). The software already includes the lookup table for 1S lipo that indicates from the measured voltage to the estimated capacity. When you use other lipos, you must integrate them into the source code, at least the code is prepared for other lookup tables. The used table looks like:
 
 | 100%  | 90%   | 80%   | 70%   | 60%   | 50%   | 40%   | 30%   | 20%   | 10%   | 0%    |
 | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
