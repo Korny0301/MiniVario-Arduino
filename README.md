@@ -38,6 +38,15 @@ Since I have lots of those resistors, I used for R2 = 9.1kOhm and R1 = 5kOhm (ca
 
 Notice, that the HC-05 (and 06) are not compatible with apple products as iPhone/iPad. Those device will not find the bluetooth module due to missing licenses (google it if you are interested). Even my MacbookPro was not able to connect - but at least it found the device while scanning. Therefore I used the HM-10 that looks the same from a software side of view. 
 
+### Lipo capacity
+
+The program shows the measured lipo capacity at startup by default (can be disabled). The LED is used to indicate the available capacity by blinking with a maximum of five blink indicators. 
+
+The capacity can be estimated by using the characteristics of lipo batteries. The nominal voltages can be found ![here](https://blog.ampow.com/lipo-voltage-chart). The software already includes the lookup table for 1S lipo that indicates from the measured voltage to the estimated capacity. When you use other lipos, you must integrate them into the source code, at least the code is prepared for other lookup tables. The used table looks like:
+
+| 100%  | 90%   | 80%   | 70%   | 60%   | 50%   | 40%   | 30%   | 20%   | 10%   | 0%    |
+| ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- | ----- |
+| 4.2V  | 4.11V | 4.02V | 3.95V | 3.87V | 3.84V | 3.8V  | 3.77V | 3.73V | 3.69V | 3.27V |
 
 ### Feature requests / nice to have / maybe implemented in future
 
