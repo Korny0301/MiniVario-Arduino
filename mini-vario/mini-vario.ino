@@ -32,6 +32,7 @@
 // TODO WIP
 #define RISE_EVALUATION_IVKOPIVKO 1
 #define RISE_EVALUATION_PAVLESKI  2
+#define RISE_EVALUATION_KONRAD    3
 
 #define BT_PROTOCOL_BLUEFLY 1 // TODO not sure if this works
 #define BT_PROTOCOL_LK8EX1 2 // worked for me with Flyskyhy app on iOS 15
@@ -55,7 +56,9 @@
 #define BT_PROTOCOL BT_PROTOCOL_LK8EX1
 
 // TODO WIP
-#define RISE_EVALUATION RISE_EVALUATION_IVKOPIVKO
+#define RISE_EVALUATION RISE_EVALUATION_KONRAD
+//#define RISE_EVALUATION RISE_EVALUATION_IVKOPIVKO
+//#define RISE_EVALUATION RISE_EVALUATION_PAVLESKI
 
 // speaker and led init sequence to show that device is up
 #define INTRO_SEQUENCE_TONE 0
@@ -64,23 +67,36 @@
 #define INTRO_SEQUENCE_BATT 1
 
 // use low power mode in every cyclic iteration for optimized power consumption
-#define ENTER_CYCLIC_LOW_POWER_STATE 1
+#define ENTER_CYCLIC_LOW_POWER_STATE 0
 
 #if ENTER_CYCLIC_LOW_POWER_STATE
 // possible values: SLEEP_30MS, SLEEP_60MS, SLEEP_120MS, SLEEP_250MS, SLEEP_500MS, SLEEP_1S, ...
-# define CYCLIC_LOW_POWER_DURATION SLEEP_120MS
+//# define CYCLIC_LOW_POWER_DURATION SLEEP_8S // ATTENTION: used timer with millis() is PAUSED while low power mode
 // use low power cycle instead of fixed timings for cyclic operations
 # define CYCLIC_TIMING_OF_LOW_POWER_WAKEUP 1
 # include "LowPower.h"
 #endif
 
-#define DEBUG_NO_TONE 0
+#define DEBUG_NO_TONE 1
+#define DEBUG_NO_BLUETOOTH 0
 
+// debug printf output
 #define DEBUG_BARO_READ 0
 #define DEBUG_RISE_CALCULATION 0
 #define DEBUG_BATTERY_VOLTAGE 0
+// my bluetooth module (HM-10) only answered when there was not mobile phone connected via BT
 #define DEBUG_BT_READ 0
 #define DEBUG_BT_CYCLIC_WRITE 0
+
+#define DEBUG_PRINT_BAUD 115200
+
+// check lookup table for valid baudrates
+#define BLUETOOTH_PRINT_BAUD 115200
+// IMPORTANT: when you change the baudrate, the bluetooth module will store the
+// last baud, such that you will need the new baudrate the next time!
+// change the old baud to your default (9600) and start the application once.
+// Afterwards, set the old baud to the new configured one
+#define BLUETOOTH_PRINT_BAUD_OLD 115200
 
 #define ARRAYSIZE(x) sizeof(x)/sizeof(x[0])
 
@@ -115,15 +131,20 @@ const char* BluetoothName = "Kovario";
 
 #define BT_USE_LN_FOR_CMD_EXECUTION 0
 
-# if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
-#define AMOUNT_AVG_VALS 8 // Anzahl Werte fuer Mittelwert bilden
-const float min_steigen = 0.20; // Minimale Steigen (Standard Wert ist 0.4m/s)
-const float max_sinken = -3.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
+#if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
+#  define AMOUNT_AVG_VALS 2 // Anzahl Werte fuer Mittelwert bilden
+const float min_steigen = 0.10; // Minimale Steigen (Standard Wert ist 0.4m/s)
+const float max_sinken = -2.50; // Maximales Sinken (Standard Wert ist - 1.1m/s)
 // Filter Einstellungen!!! Hier Veraenderungen nur sehr vorsichtig vornehmen!!!
 const float FehlerV = 3.000 * min_steigen; // Gewichtung fuer Vario Filter berechnen. 0.1 > FehlerV < 1.0
 #elif RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
 #  define NUM_PRESSURES 64
 #  define NUM_TOTALS 16
+#  define BORDER_TONE_GEN 200 // default: 200
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+#  define DEBUG_RISE_CALCULATION_CYCLES 20
+const float min_steigen = 0.15; // Minimale Steigen (Standard Wert ist 0.4m/s)
+const float max_sinken = -2.00; // Maximales Sinken (Standard Wert ist - 1.1m/s)
 #endif
 
 #if ENTER_CYCLIC_LOW_POWER_STATE && CYCLIC_TIMING_OF_LOW_POWER_WAKEUP
@@ -131,17 +152,19 @@ const long leseZeit_ms = 0;
 const long leseZeitBT_ms = 0;
 const long BlinkAliveDuration_ms = 0;
 #else
-const long leseZeit_ms = 100; // interval to read data from barometer
-const long leseZeitBT_ms = 100; // cyclic interval to send current data via bluetooth
-const long BlinkAliveDuration_ms = 100;
+const long leseZeit_ms = 25; // interval to read data from barometer
+const long leseZeitBT_ms = leseZeit_ms; // cyclic interval to send current data via bluetooth
+const long BlinkAliveDuration_ms = 200;
 #endif
 
 // after this amount of milliseconds the status led is going to blink for the given duration
-const long CycleTimeBlinkAlive_ms = 3000;
+const long CycleTimeBlinkAlive_ms = 5000;
 
-const long CycleTimeBattery_ms = 10000;
-
+// battery level is splitted into x levels for displaying level via LED blink sequence
 const short PowerLevelStages = 5;
+
+// period how often the battery level is checked (will be sent to bluetooth device in cyclic BL update)
+const long CycleTimeBattery_ms = 10000;
 
 // ###################################################
 // ######         END OF ADAPTION AREA          ######
@@ -190,6 +213,21 @@ HardwareSerial SerialBT = Serial;
 #  include <SoftwareSerial.h>
 SoftwareSerial SerialBT(BluetoothSerialSwPinRx, BluetoothSerialSwPinTx);
 #endif
+// baudrates for HM-10 module:
+const struct {
+  uint32_t baud;
+  uint8_t  nr;
+} Hm10BaudrateLookup[] = {
+  { 9600,   0 },
+  { 19200,  1 },
+  { 38400,  2 },
+  { 57600,  3 },
+  { 115200, 4 },
+  { 4800,   5 },
+  { 2400,   6 },
+  { 1200,   7 },
+  { 230400, 8 },
+};
 
 //! error number is indicated by state LED
 typedef enum error_state_ {
@@ -202,7 +240,7 @@ long Druck, Druck0, DruckB;
 
 bool BluetoothEnabled = false;
 int XOR, c, Vbat;
-float Vario, VarioR, Hoehe, AvrgV, Battery_perc, Temp;
+float Vario, VarioRaw, Hoehe, AvrgV, Battery_perc, Temp;
 
 unsigned long dZeit;
 
@@ -216,6 +254,10 @@ int total_index = 0;
 uint32_t total;
 int current_tone = 0;
 int beep_time = 0;
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+// Weight constant for low pass 1st order. Defines what factor 
+// of the new value is used for further processing
+const float lpWeight = 0.15; // must be < 1
 #endif
 
 // initialization at startup
@@ -227,19 +269,14 @@ void setup() {
 
   analogReference(DEFAULT); // default equals external voltage, here 5V
 
-  pinMode(PinBluetoothEnabled, INPUT);                 
+  pinMode(PinBluetoothEnabled, INPUT);
+#if !DEBUG_NO_BLUETOOTH
   BluetoothEnabled = digitalRead(PinBluetoothEnabled);
+#endif
 
   // for debug print to PC
-  Serial.begin(9600);
-
-  if (BluetoothEnabled) {
-    SerialBT.begin(9600); // TODO
-  }
-  
+  Serial.begin(DEBUG_PRINT_BAUD);
   DEBUG_PRINTLN("Starting mini vario project...");
-  DEBUG_PRINT("Bluetooth: ");
-  DEBUG_PRINTLN(BluetoothEnabled ? "enabled" : "disabled");
   
 #if BARO == _BARO_MS5611
   // Initialize MS5611 sensor!
@@ -263,10 +300,14 @@ void setup() {
 
   // Default settings from datasheet.
   bmp.setSampling(Adafruit_BMP280::MODE_NORMAL,     // Operating Mode.
-                  Adafruit_BMP280::SAMPLING_X2,     // Temp. oversampling
+                  Adafruit_BMP280::SAMPLING_X16,    // Temp. oversampling
                   Adafruit_BMP280::SAMPLING_X16,    // Pressure oversampling
                   Adafruit_BMP280::FILTER_X16,      // Filtering
                   Adafruit_BMP280::STANDBY_MS_500); // Standby time
+#endif
+
+#if DEBUG_NO_TONE
+  pinMode(PinSpeaker, INPUT);
 #endif
 
 #if INTRO_SEQUENCE_TONE
@@ -300,13 +341,44 @@ void setup() {
 
   // rename bluetooth device
   if (BluetoothEnabled) {
-      BLUETOOTH_PRINT("AT+NAME");
-      BLUETOOTH_PRINTLN(BluetoothName); // set new bluetooth name
-      delay(500);
+      SerialBT.begin(BLUETOOTH_PRINT_BAUD_OLD); // start with the last configured baudrate
+      
+      DEBUG_PRINT("Bluetooth: ");
+      DEBUG_PRINTLN(BluetoothEnabled ? "enabled" : "disabled");
+      // change baudrate to bluetooth module
+      int nr = 0; // default baudrate nr
+      for (int i = 0; i < ARRAYSIZE(Hm10BaudrateLookup); ++i) {
+        if (Hm10BaudrateLookup[i].baud == BLUETOOTH_PRINT_BAUD) {
+          nr = Hm10BaudrateLookup[i].nr;
+#if DEBUG_BT_READ
+          DEBUG_PRINT("Found BT nr: ");
+          DEBUG_PRINTLN(nr);
+#endif
+        }
+      }
+      BLUETOOTH_PRINT("AT+BAUD");
+      BLUETOOTH_PRINTLN(nr);
+      delay(50);
+      while (SerialBT.available()) {
+        char c = SerialBT.read();
+        DEBUG_PRINT(c);
+      }
 
 #if DEBUG_BT_READ
+      BLUETOOTH_PRINTLN("AT+BAUD?");
+      delay(50);
+      DEBUG_PRINT("BT baudrate: ");
+      while (SerialBT.available()) {
+        char c = SerialBT.read();
+        DEBUG_PRINT(c);
+      }
+#endif
+      BLUETOOTH_PRINT("AT+NAME");
+      BLUETOOTH_PRINTLN(BluetoothName); // set new bluetooth name
+      delay(50);
+#if DEBUG_BT_READ
       BLUETOOTH_PRINTLN("AT+NAME?");
-      delay(500);
+      delay(50);
       DEBUG_PRINT("BT read name: ");
       while (SerialBT.available()) {
         char c = SerialBT.read();
@@ -315,7 +387,8 @@ void setup() {
 #endif
 
       BLUETOOTH_PRINTLN("AT+RESET");
-      delay(500);
+      delay(100);
+      SerialBT.begin(BLUETOOTH_PRINT_BAUD);
   }
 
 #if RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
@@ -344,6 +417,8 @@ static void handleRiseTone()
   else {
     noTone(PinSpeaker);
   }
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+  PiepserX();
 #elif RISE_EVALUATION == RISE_EVALUATION_PAVLESKI
   total -= pressure[pressure_index];
   pressure[pressure_index] = Druck;
@@ -354,15 +429,18 @@ static void handleRiseTone()
   old_total[total_index] = total;
   pressure_index++;
   total_index++;
-  if(pressure_index >= NUM_PRESSURES)pressure_index = 0;
-  if(total_index >= NUM_TOTALS)total_index = 0;
-  if(rate < -200){
-    if(beep_time <5)
+  if (pressure_index >= NUM_PRESSURES)
+    pressure_index = 0;
+  if (total_index >= NUM_TOTALS)
+    total_index = 0;
+
+  if (rate < -BORDER_TONE_GEN){
+    if(beep_time < 5)
       tone(PinSpeaker, 500 - rate, 1000);
     else
       noTone(PinSpeaker);
   }
-  else if(rate > 200)
+  else if (rate > BORDER_TONE_GEN)
   {
     float f = 100.0 + 40000.0 * 1.0/((float)rate);
     tone(PinSpeaker, f, 1000);
@@ -372,7 +450,8 @@ static void handleRiseTone()
     noTone(PinSpeaker);
   }
   beep_time++;
-  if(beep_time >= 10)beep_time = 0;
+  if (beep_time >= 10)
+    beep_time = 0;
   
 #  if DEBUG_RISE_CALCULATION
   DEBUG_PRINT("pressure_index=");
@@ -424,11 +503,13 @@ void loop()
   else if ((timeNow_ms - lastTimeBlinkAlive_ms) >= BlinkAliveDuration_ms) {
     SetStatusLeds(LOW);
   }
-    
+
   if ((diff_ms = timeNow_ms - lastTimeDiff_ms) >= leseZeit_ms) {
     BaroAuslesen();
 #if RISE_EVALUATION == RISE_EVALUATION_IVKOPIVKO
     SteigenBerechnen(diff_ms);
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+    SteigenBerechnenKonrad(diff_ms);
 #endif
     lastTimeDiff_ms = timeNow_ms;
   }
@@ -513,12 +594,12 @@ static void SteigenBerechnen(float timeDiff_ms)
   }
 
   // Steigwerte berechnen.
-  VarioR = ((Hoehe - kal[0]) / (timeDiff_ms / 1000));
+  VarioRaw = ((Hoehe - kal[0]) / (timeDiff_ms / 1000));
 
-  //VarioR=0.500; // Ton Test ! In normalen Betrieb auskommentieren!  ###################
-  //kal[1] = VarioR;
+  //VarioRaw=0.500; // Ton Test ! In normalen Betrieb auskommentieren!  ###################
+  //kal[1] = VarioRaw;
 
-  kal[1] = 0.55 * VarioR + 0.45 * kal[1];
+  kal[1] = 0.55 * VarioRaw + 0.45 * kal[1];
 
   kal[0] = Hoehe;
 
@@ -552,11 +633,43 @@ static void SteigenBerechnen(float timeDiff_ms)
   DEBUG_PRINT("; h[m]=");
   DEBUG_PRINTA(Hoehe, 2);
   
-  DEBUG_PRINT("; VarioR[m/s]=");
-  DEBUG_PRINTA(VarioR, 2);
+  DEBUG_PRINT("; VarioRaw[m/s]=");
+  DEBUG_PRINTA(VarioRaw, 2);
   
   DEBUG_PRINT("; Vario[m/s]=");
   DEBUG_PRINTLNA(Vario, 2);
+#endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
+}
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+static void SteigenBerechnenKonrad(float timeDiff_ms)
+{
+  static int startCh = 0;
+  static float oldHeight = 0.0;
+  
+  if (!startCh) {
+    oldHeight = Hoehe;
+    startCh = 1;
+  }
+
+  float dH_dt = ((Hoehe - oldHeight) * 1000) / timeDiff_ms; // in m/s
+  VarioRaw = dH_dt;
+  Vario = (1.0 - lpWeight) * Vario + lpWeight * dH_dt;
+
+  oldHeight = Hoehe;
+
+#if DEBUG_RISE_CALCULATION
+  static int cycleCnt = 0;
+  if (cycleCnt++ >= DEBUG_RISE_CALCULATION_CYCLES) {
+    cycleCnt = 0;
+    DEBUG_PRINT("dZeit[ms]=");
+    DEBUG_PRINTA(timeDiff_ms, 2);
+    
+    DEBUG_PRINT("; h[m]=");
+    DEBUG_PRINTA(Hoehe, 2);
+    
+    DEBUG_PRINT("; Vario[m/s]=");
+    DEBUG_PRINTLNA(Vario, 2);
+  }
 #endif                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         
 }
 #endif
@@ -581,7 +694,7 @@ static void AkkuVolt()
     {  10, 3.69 },
     {   0, 3.27 },
 #else
-# error Used battery is not defined with it's capacity levels, do some internet research to find other tables
+# error Used battery is not defined with its capacity levels, do some internet research to find other tables
 #endif
   };
   
@@ -640,6 +753,62 @@ static void PiepserX()
     delay(150);
     tone(PinSpeaker, 100, 150);
     delay(175);
+  }
+}
+#elif RISE_EVALUATION == RISE_EVALUATION_KONRAD
+static void PiepserX()
+{
+  static bool toneActive = false;
+  static bool pauseActive = false;
+  static float pause = 0.0;
+  static float duration = 0.0;
+  static unsigned long tEnd_ms = 0;
+  unsigned long tNow_ms = millis();
+  
+  //Vario = -31.00; // Ton Test! In normalen Betrieb auskommentieren!
+
+  if (toneActive) {
+    if (tEnd_ms - tNow_ms >= (unsigned long)duration) {
+      noTone(PinSpeaker);
+      toneActive = false;
+      pauseActive = true;
+      tEnd_ms = tNow_ms + pause;
+    }
+  }
+  else if (pauseActive) {
+    if (tEnd_ms - tNow_ms >= (unsigned long)pause) {
+      pauseActive = false;
+    }
+  }
+  else {
+    if (Vario >= min_steigen) { // Wenn Steigen groesser als min_steigen
+      float frequency = -0.33332 * Vario * Vario * Vario * Vario + 9.54324 * Vario * Vario * Vario - 102.64693 * Vario * Vario + 512.227 * Vario + 84.38465;
+      duration = 400;
+      pause = 2 * (1.6478887 * Vario * Vario - 38.2889 * Vario + 341.275253);
+      frequency = frequency;
+      duration = duration;
+      //DEBUG_PRINT("freq=");
+      //DEBUG_PRINT(frequency);
+      //DEBUG_PRINT(", dur=");
+      //DEBUG_PRINTLN(duration);
+      //if ((tNow_ms - tStart_ms) >= (unsigned long)(pause)) {
+      //  tStart_ms = tNow_ms;
+        //tone(PinSpeaker, int(frequency), 1000);
+        toneActive = true;
+      //}
+    }
+    else if (Vario <= max_sinken) { // Wenn Sinken kleiner als max_sinken
+      duration = 300;
+      pause = 3000;
+      toneActive = true;
+      //delay(dur1);
+    }
+
+    if (toneActive) {
+      tone(PinSpeaker, 200, 1000);
+      //delay(duration);
+      tEnd_ms = tNow_ms + duration;
+    }
   }
 }
 #endif
@@ -754,6 +923,10 @@ static void Bluetooth()
   DEBUG_PRINT(s);
   DEBUG_PRINT("*");
   DEBUG_PRINTLNA(XOR, HEX);
+  DEBUG_PRINT("VARIO: ");
+  DEBUG_PRINT(Vario);
+  DEBUG_PRINT(", cm:");
+  DEBUG_PRINTLN(Vario*100);
 # endif
   
 #elif BT_PROTOCOL == BT_PROTOCOL_CUSTOM_BFV
@@ -798,8 +971,8 @@ static void Bluetooth()
 
 #elif BT_PROTOCOL == BT_PROTOCOL_TEST_VIA_SERIAL
 
-  // Zum Testen ueber Serial-Port !!!-> nicht vergessen VarioR aus zu kommentieren.
-  // Temp.[C°];Druck[Pa];Hoehe[m];dZeit[ms];VarioR[m/s];Vario[m/s];BT Taster
+  // Zum Testen ueber Serial-Port !!!-> nicht vergessen VarioRaw aus zu kommentieren.
+  // Temp.[C°];Druck[Pa];Hoehe[m];dZeit[ms];VarioRaw[m/s];Vario[m/s];BT Taster
 
   DEBUG_PRINTA(Temp, 2);
   DEBUG_PRINT("; ");
@@ -813,7 +986,7 @@ static void Bluetooth()
   DEBUG_PRINTA(dZeit/1000, 3);
   DEBUG_PRINT("; ");
 
-  DEBUG_PRINTA(VarioR, 2);
+  DEBUG_PRINTA(VarioRaw, 2);
   DEBUG_PRINT("; ");
 
   DEBUG_PRINTA(Vario, 2);
