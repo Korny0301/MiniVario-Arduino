@@ -67,6 +67,8 @@
 #define INTRO_SEQUENCE_BATT 1
 
 // use low power mode in every cyclic iteration for optimized power consumption
+// Warning: cyclic low power state does not work correctly
+// since time cyclic time measurement does not work in low power mode
 #define ENTER_CYCLIC_LOW_POWER_STATE 0
 
 #if ENTER_CYCLIC_LOW_POWER_STATE
@@ -75,6 +77,15 @@
 // use low power cycle instead of fixed timings for cyclic operations
 # define CYCLIC_TIMING_OF_LOW_POWER_WAKEUP 1
 # include "LowPower.h"
+#endif
+
+// TODO WIP, not working right now, BR disconnected to mobile phone when asking for AT command
+#define LOW_POWER_WHEN_INACTIVE 0
+#if LOW_POWER_WHEN_INACTIVE
+// after this time the controller goes into deep sleep mode
+// restart controller when you want to reactivate the vario
+# define LOW_POWER_INACTIVE_TIME_S (1 * 60 * 60)
+const unsigned long CycleBtAliveCheck_ms = 5000;
 #endif
 
 #define DEBUG_NO_TONE 1
@@ -359,12 +370,12 @@ void setup() {
       BLUETOOTH_PRINT("AT+BAUD");
       BLUETOOTH_PRINTLN(nr);
       delay(50);
+#if DEBUG_BT_READ
       while (SerialBT.available()) {
         char c = SerialBT.read();
         DEBUG_PRINT(c);
       }
 
-#if DEBUG_BT_READ
       BLUETOOTH_PRINTLN("AT+BAUD?");
       delay(50);
       DEBUG_PRINT("BT baudrate: ");
@@ -388,6 +399,10 @@ void setup() {
 
       BLUETOOTH_PRINTLN("AT+RESET");
       delay(100);
+      // remove all may received characters by BT module
+      while (SerialBT.available()) {
+        SerialBT.read();
+      }
       SerialBT.begin(BLUETOOTH_PRINT_BAUD);
   }
 
@@ -482,6 +497,9 @@ void loop()
   static unsigned long lastTimeBlinkAlive_ms;
   static unsigned long lastTimeDiff_ms;
   static unsigned long lastTimeBluetooth_ms;
+#if LOW_POWER_WHEN_INACTIVE
+  static unsigned long lastTimeBtAlive_ms;
+#endif
   unsigned long diff_ms;
   unsigned long timeNow_ms = micros() / 1000;
 
@@ -495,6 +513,22 @@ void loop()
     AkkuVolt();
     lastTimeDiffBattery_ms = timeNow_ms;
   }
+
+#if LOW_POWER_WHEN_INACTIVE
+  if ((timeNow_ms - lastTimeBtAlive_ms) >= CycleBtAliveCheck_ms) {
+    // TODO WIP
+    BLUETOOTH_PRINTLN("AT");
+    SerialBT.flush();
+    delay(leseZeitBT_ms);
+    DEBUG_PRINT("BT connected: ");
+    while (SerialBT.available()) {
+      char c = SerialBT.read();
+      DEBUG_PRINT(c);
+    }
+    DEBUG_PRINT("\n");
+    lastTimeBtAlive_ms = timeNow_ms;
+  }
+#endif
 
   if ((timeNow_ms - lastTimeBlinkAlive_ms) >= CycleTimeBlinkAlive_ms) {
     SetStatusLeds(HIGH);
